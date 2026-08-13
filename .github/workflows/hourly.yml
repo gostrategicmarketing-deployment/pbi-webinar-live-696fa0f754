@@ -1,0 +1,73 @@
+name: Refresh webinar dashboard
+
+# Hourly, plus a manual trigger for when you want it now rather than at :05.
+#
+# GitHub's scheduled runs are best-effort: on a busy shared runner pool the job
+# commonly starts 5-15 minutes after the hour, and occasionally a tick is skipped
+# entirely. The page always states the time of the pull it was built from, so a late
+# or missed run shows as a stale timestamp rather than as wrong numbers.
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+# Only the built page is published; nothing is committed back to the repo, so there
+# is no hourly commit churn.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# A long pull must not be cut off by the next hour's run, but queued runs should not
+# stack up either: the newest wins.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      # Creatives are keyed by image identity and never change once downloaded, so
+      # restoring the cache saves re-fetching ~64 images from Meta's CDN every hour.
+      # The key rotates daily so the cache cannot grow without bound.
+      - uses: actions/cache@v4
+        with:
+          path: creative-cache
+          key: creatives-${{ github.run_id }}
+          restore-keys: creatives-
+
+      - name: Pull from Meta
+        env:
+          FB_TOKEN: ${{ secrets.FB_TOKEN }}
+        run: python3 pull.py
+
+      - name: Build the page
+        run: |
+          python3 build.py
+          mkdir -p _site
+          cp index.html robots.txt _site/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,4 @@
+# The page also carries a noindex meta tag. This file is the belt to that pair of braces:
+# the repo is public so the URL can be shared, but nothing here should be crawled.
+User-agent: *
+Disallow: /
