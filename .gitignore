@@ -1,5 +1,2 @@
-# Rebuilt every run from Meta; nothing here is a source of truth.
-index.html
-_site/
-data/
-creative-cache/
+# Nothing but the published page lives here. The pull scripts, snapshots, creative
+# cache and the Meta token all stay on the machine that builds it.
