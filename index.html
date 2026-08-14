@@ -3936,8 +3936,8 @@ const BUILD_STAMP = "Aug 14, 2026 at 8:07 AM PDT";
 // Served by serve.py, POST /refresh re-pulls Meta, rebuilds and publishes: one click,
 // a few seconds, done. The published copy on GitHub Pages is a static file with no way
 // to reach Meta, and giving it one would mean shipping an ads token into a public page,
-// so there the button re-checks for a newer published build and says plainly where a
-// real refresh comes from.
+// so there the button re-checks for a newer published build; a launchd job on the Mac
+// republishes hourly, so a newer build is normally at most an hour away.
 const btn = document.getElementById('refresh');
 const btnText = document.getElementById('refresh-text');
 const msgEl = document.getElementById('refresh-msg');
@@ -4008,12 +4008,12 @@ async function checkForNewer() {
   } catch (err) { /* offline or mid-deploy; fall through to the message */ }
 
   busy(false);
-  msg('This is the published copy, so it cannot reach Meta from your browser: doing so ' +
-      'would mean putting the ad account token into a public page. It is already showing ' +
-      'the newest published pull, from <b>' + BUILD_STAMP + '</b>.<br><br>' +
-      'For fresh numbers, run <code>refresh.command</code> in the dashboard folder on ' +
-      'your Mac. That pulls Meta, rebuilds and republishes here in one step. Then press ' +
-      'this button again to pick it up.');
+  msg('You are seeing the newest published pull, from <b>' + BUILD_STAMP + '</b>. ' +
+      'The page republishes itself about once an hour, so check back shortly and ' +
+      'press Refresh again to pick up the next pull.<br><br>' +
+      'The published copy cannot reach Meta from your browser: doing so would mean ' +
+      'putting the ad account token into a public page. If a pull is needed sooner, ' +
+      '<code>refresh.command</code> in the dashboard folder republishes immediately.');
 }
 
 btn.addEventListener('click', refresh);
