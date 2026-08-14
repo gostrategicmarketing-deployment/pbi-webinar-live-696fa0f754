@@ -1,0 +1,86 @@
+name: refresh
+
+# Pull Meta + Hyros, rebuild the dashboard, deploy it to GitHub Pages.
+# The two API credentials live only in Actions Secrets (FB_TOKEN, HYROS_API_KEY);
+# they reach the scripts as environment variables and never touch the repo or the
+# published page. Both are read-only keys.
+
+on:
+  schedule:
+    - cron: "8 * * * *" # hourly; GitHub may delay scheduled runs a few minutes
+  workflow_dispatch: {} # run-on-demand from the Actions tab or the GitHub app
+  push:
+    branches: [main]
+    paths:
+      - pull.py
+      - build.py
+      - hyros_seed.json
+      - fonts/**
+      - brand/**
+      - robots.txt
+      - .github/workflows/refresh.yml
+
+permissions:
+  contents: write # keepalive commit only; the site itself deploys via Pages
+  pages: write
+  id-token: write
+
+# One refresh at a time, and never cancel a deploy mid-flight.
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      # Downscaled ad creatives, carried between runs so only new ads download.
+      - uses: actions/cache@v4
+        with:
+          path: creative-cache
+          key: creative-cache-${{ github.run_id }}
+          restore-keys: |
+            creative-cache-
+
+      - name: Pull Meta + Hyros
+        env:
+          FB_TOKEN: ${{ secrets.FB_TOKEN }}
+          HYROS_API_KEY: ${{ secrets.HYROS_API_KEY }}
+        run: python pull.py
+
+      - name: Build the page
+        run: python build.py
+
+      - name: Assemble the site
+        run: mkdir -p _site && cp index.html robots.txt _site/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+      # GitHub disables cron schedules in repos with no commit activity for 60 days.
+      # An empty commit every ~50 days keeps the hourly refresh alive forever.
+      - name: Keep the schedule alive
+        run: |
+          LAST=$(git log -1 --format=%ct)
+          NOW=$(date +%s)
+          if [ $(( (NOW - LAST) / 86400 )) -ge 50 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "Keep the hourly schedule alive"
+            git push
+          fi

@@ -1,0 +1,16 @@
+{
+ "_comment": "Fetched through the Hyros MCP on 2026-08-13 because no PBI-scoped Hyros REST key is on this machine yet. pull.py prefers the live REST call and only falls back here; once the key exists at PBI 2/hyros_key.txt this file stops being read. It carries its own date so the page greys the figures out the moment they stop being today's.",
+ "date": "2026-08-13",
+ "leads": 53,
+ "cost": 773.35,
+ "clicks": 296,
+ "cost_per_lead": 14.59,
+ "cost_per_click": 2.61,
+ "conv_rate": 17.91,
+ "source": "Hyros MCP attribution report, last click",
+ "fetched_at": "2026-08-13T16:10:00-07:00",
+ "breakdown": [
+  {"campaign_id": "52585678002811", "name": "TOF | Weekly Webinar | CBO", "leads": 49, "new_leads": 45, "cost": 682.1, "clicks": 264, "cost_per_lead": 13.92},
+  {"campaign_id": "52585987551411", "name": "TOF | Weekly Webinar Lead Ads", "leads": 4, "new_leads": 3, "cost": 91.25, "clicks": 32, "cost_per_lead": 22.81}
+ ]
+}

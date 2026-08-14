@@ -1,2 +1,5 @@
-# Nothing but the published page lives here. The pull scripts, snapshots, creative
-# cache and the Meta token all stay on the machine that builds it.
+# Build products; the workflow makes these fresh on every run.
+data/
+creative-cache/
+_site/
+__pycache__/
