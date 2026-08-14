@@ -1521,7 +1521,8 @@ async function checkForNewer() {{
       'press Refresh again to pick up the next pull.<br><br>' +
       'The published copy cannot reach Meta from your browser: doing so would mean ' +
       'putting the ad account token into a public page. If a pull is needed sooner, ' +
-      '<code>refresh.command</code> in the dashboard folder republishes immediately.');
+      'run the <b>refresh</b> workflow from the repo\\'s Actions tab (works from any ' +
+      'device with repo access), or <code>refresh.command</code> on the Mac.');
 }}
 
 btn.addEventListener('click', refresh);
