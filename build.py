@@ -386,47 +386,9 @@ def swatches():
       </div>""" for name, k, pms, use in rows)
 
 
-def today_html(t):
-    """Today's blended box: registrations from Hyros, spend and clicks from Meta.
-
-    Kept outside the window tabs because it is always today regardless of which window
-    is showing, and visually separated because it mixes two sources.
-    """
-    if not t:
-        return ""
-    hy = t.get("hyros")
-    stale = bool(hy and hy.get("stale"))
-    have = bool(hy and hy.get("leads"))
-
-    cells = [
-        ("Blended webinar registrations", n(hy["leads"]) if have else "—", "Hyros, all attributed sources"),
-        ("Cost per registration", money(t["cost_per_lead"]) if t.get("cost_per_lead") else "—", "Spend ÷ registrations"),
-        ("Link clicks", n(t["link_clicks"]), "Outbound to the page"),
-        ("Cost per link click", money(t["cost_per_link_click"]), "Spend ÷ link clicks"),
-        ("Total ad spend", money(t["spend"], 2), "Amount spent today"),
-        ("Conversion rate", pct(t["conv_rate"]) if t.get("conv_rate") else "—", "Hyros registrations ÷ link clicks"),
-    ]
-    grid = "".join(f"""
-        <div class="tcell">
-          <p class="tcell-label">{e(label)}</p>
-          <p class="tcell-value">{e(value)}</p>
-          <p class="tcell-def">{e(defn)}</p>
-        </div>""" for label, value, defn in cells)
-
-    if not have:
-        note = ('<span class="tflag bad">Hyros not connected</span> '
-                'Registrations, cost per lead and conversion rate need a PBI-scoped Hyros '
-                'API key at <code>PBI 2/hyros_key.txt</code>. Spend and link clicks above '
-                'are Meta\'s and are live.')
-    elif stale:
-        note = (f'<span class="tflag bad">Stale</span> These registration figures are from '
-                f'{fmt_day(hy["date"])}, not today. They were seeded through the Hyros MCP and '
-                f'cannot refresh on their own; add the API key to make this box live.')
-    else:
-        note = (f'Registrations come from {e(hy.get("source", "Hyros"))}, and every registration '
-                f'figure on this page is built the same way, down to the individual creative. '
-                f'Spend and link clicks are Meta\'s.')
-
+def summary_box(flag, title, blurb, cells, note, extra_class=""):
+    """One blended-registrations panel. Today and the weekly summary are the same object
+    with different bounds, so they share this renderer rather than drifting apart."""
     hero = cells[0]
     rest = "".join(f"""
         <div class="tcell">
@@ -436,23 +398,98 @@ def today_html(t):
         </div>""" for label, value, defn in cells[1:])
 
     return f"""
-  <section class="today{' today-stale' if (stale or not have) else ''}">
+  <section class="today {extra_class}">
     <div class="today-head">
-      <span class="today-flag">Today · {fmt_day(t["date"])}</span>
-      <h2>Blended webinar registrations</h2>
-      <p>Every registration Hyros credits today, from every source, against today's ad
-         spend. This is the number to steer on.</p>
+      <span class="today-flag">{flag}</span>
+      <h2>{e(title)}</h2>
+      <p>{blurb}</p>
     </div>
     <div class="today-body">
       <div class="thero">
         <p class="thero-value">{hero[1]}</p>
-        <p class="thero-label">Blended webinar registrations</p>
-        <p class="thero-def">{hero[2]}</p>
+        <p class="thero-label">{e(hero[0])}</p>
+        <p class="thero-def">{e(hero[2])}</p>
       </div>
       <div class="tgrid">{rest}</div>
     </div>
     <p class="tnote">{note}</p>
   </section>"""
+
+
+def blended_cells(leads, cost_per_lead, link_clicks, cost_per_click, spend, conv,
+                  spend_def, have):
+    """The six figures, in the order they are argued. Identical for every window."""
+    return [
+        ("Blended webinar registrations", n(leads) if have else "—", "Hyros, all attributed sources"),
+        ("Cost per registration", money(cost_per_lead) if cost_per_lead else "—", "Spend ÷ registrations"),
+        ("Link clicks", n(link_clicks), "Outbound to the page"),
+        ("Cost per link click", money(cost_per_click), "Spend ÷ link clicks"),
+        ("Total ad spend", money(spend, 2), spend_def),
+        ("Conversion rate", pct(conv) if conv else "—", "Hyros registrations ÷ link clicks"),
+    ]
+
+
+def today_html(t):
+    """Today's blended box. Outside the window tabs because it is always today, whichever
+    tab is showing, and visually separated because it mixes two sources."""
+    if not t:
+        return ""
+    hy = t.get("hyros")
+    stale = bool(hy and hy.get("stale"))
+    have = bool(hy and hy.get("leads"))
+
+    cells = blended_cells(hy["leads"] if have else 0, t.get("cost_per_lead"),
+                          t["link_clicks"], t["cost_per_link_click"], t["spend"],
+                          t.get("conv_rate"), "Amount spent today", have)
+
+    if not have:
+        note = ('<span class="tflag bad">Hyros not connected</span> '
+                'Registrations, cost per registration and conversion rate need a PBI-scoped '
+                'Hyros API key at <code>PBI 2/hyros_key.txt</code>. Spend and link clicks '
+                'above are Meta\'s and are live.')
+    elif stale:
+        note = (f'<span class="tflag bad">Stale</span> These registration figures are from '
+                f'{fmt_day(hy["date"])}, not today. They were seeded through the Hyros MCP and '
+                f'cannot refresh on their own; add the API key to make this box live.')
+    else:
+        note = (f'Registrations come from {e(hy.get("source", "Hyros"))}, and every registration '
+                f'figure on this page is built the same way, down to the individual creative. '
+                f'Spend and link clicks are Meta\'s.')
+
+    return summary_box(f'Today · {fmt_day(t["date"])}',
+                       "Blended webinar registrations",
+                       "Every registration Hyros credits today, from every source, against "
+                       "today\'s ad spend. This is the number to steer on.",
+                       cells, note,
+                       "today-stale" if (stale or not have) else "")
+
+
+def week_html(w):
+    """The Monday-to-Monday cycle, in the same format as today."""
+    if not w:
+        return ""
+    have = bool(w.get("leads"))
+    span = f'{fmt_day(w["since"])} – {fmt_day(w["until"])}'
+    cells = blended_cells(w["leads"], w.get("cost_per_lead"), w["link_clicks"],
+                          w.get("cost_per_link_click"), w["spend"], w.get("conv_rate"),
+                          "Amount spent this week", have)
+
+    if w["in_progress"]:
+        note = (f'<span class="tflag">In progress</span> This week closes on '
+                f'{fmt_day(w["until"])}. The figures cover {w["elapsed_days"]} of its '
+                f'{w["days"]} days, through {fmt_day(w["api_until"])}, and will keep '
+                f'climbing until it closes. Registrations are Hyros; spend and link '
+                f'clicks are Meta\'s.')
+    else:
+        note = (f'A complete cycle: {w["days"]} days, {fmt_day(w["since"])} through '
+                f'{fmt_day(w["until"])}. Registrations are Hyros; spend and link clicks '
+                f'are Meta\'s.')
+
+    return summary_box(f'Weekly summary · {span}',
+                       "Blended webinar registrations",
+                       "The funnel\'s own cycle: Monday to Monday, eight days counting both "
+                       "ends, so a week opens on one live workshop and closes on the next.",
+                       cells, note, "week" + (" week-open" if w["in_progress"] else ""))
 
 
 def window_html(key, w, cr, active):
@@ -663,7 +700,8 @@ def build(snap):
         stamp=e(fmt_stamp(m["pulled_at"], m.get("timezone_abbrev", ""))),
         live_count=len(live), matched=len(m["campaigns_matched"]),
         lead_action=e(m["lead_action"]),
-        tabs=tabs, windows=wins, today=today_html(snap.get("today")),
+        tabs=tabs, windows=wins,
+        today=today_html(snap.get("today")) + week_html(snap.get("week")),
         logomark=lockup(), swatches=swatches(),
         thin_spend=money(THIN_SPEND, 0), thin_clicks=THIN_LINK_CLICKS,
         featured_n=FEATURED,
@@ -894,6 +932,11 @@ h2 {{
 .today-stale {{
   background: linear-gradient(155deg, #4A4A4A 0%, var(--onyx) 100%);
 }}
+/* The weekly box is the same object over a longer bound, so it keeps the format and
+   drops only the masthead tuck: it sits in the flow under today, not under the band. */
+.today.week {{ margin-top: 20px; }}
+.week .today-flag {{ background: var(--onyx); color: #fff; }}
+.week-open .today-flag {{ background: var(--citron); color: #3A3000; }}
 .today-head {{ padding: 26px 28px 22px; }}
 .today-flag {{
   display: inline-block; margin-bottom: 13px; padding: 6px 13px; border-radius: 2px;

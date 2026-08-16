@@ -422,6 +422,66 @@ def hyros_daily(campaign_ids, since, until, cap=31):
     return out
 
 
+def hyros_range(campaign_ids, since, until):
+    """Hyros registrations, cost and clicks for a date range.
+
+    Hyros returns an empty result for any endDate in the future rather than the data so
+    far, so a Monday-to-Monday window whose closing Monday has not arrived would read as
+    zero registrations on live spend. Callers clamp `until` to today; this guards it too.
+    """
+    if not hyros_key():
+        return None
+    rows = hyros_call("facebook_campaign", campaign_ids, since, until)
+    rows = [r for r in rows if isinstance(r, dict)]
+    if not rows:
+        return None
+    leads = sum(int(r.get("leads") or 0) for r in rows)
+    cost = round(sum(float(r.get("cost") or 0) for r in rows), 2)
+    clicks = sum(int(r.get("clicks") or 0) for r in rows)
+    return {"leads": leads, "cost": cost, "clicks": clicks}
+
+
+def week_box(campaign_ids, today):
+    """The funnel's own reporting cycle: Monday to Monday, eight days inclusive.
+
+    The webinar runs on Mondays, so a week here opens on one webinar and closes on the
+    next. `start` is the most recent Monday on or before today and `end` is start + 7,
+    which is the following Monday: eight days counting both ends.
+
+    While that closing Monday is still ahead, the window is marked in progress and the
+    APIs are asked only up to today. Asking Hyros past today returns nothing at all.
+    """
+    start = today - timedelta(days=today.weekday())     # Monday of the current week
+    end = start + timedelta(days=7)                     # the following Monday
+    api_end = min(end, today)
+    in_progress = end > today
+
+    hy = hyros_range(campaign_ids, start.isoformat(), api_end.isoformat())
+
+    rows = insights("account", start.isoformat(), api_end.isoformat())
+    spend = round(num(rows[0], "spend"), 2) if rows else 0.0
+    clicks = int(num(rows[0], "inline_link_clicks")) if rows else 0
+    pixel = int(acts(rows[0]).get(LEAD_ACTION, 0)) if rows else 0
+
+    leads = hy["leads"] if hy else 0
+    return {
+        "since": start.isoformat(),
+        "until": end.isoformat(),
+        "api_until": api_end.isoformat(),
+        "days": (end - start).days + 1,
+        "elapsed_days": (api_end - start).days + 1,
+        "in_progress": in_progress,
+        "spend": spend,
+        "link_clicks": clicks,
+        "cost_per_link_click": round(spend / clicks, 2) if clicks else None,
+        "meta_pixel_leads": pixel,
+        "hyros": hy,
+        "leads": leads,
+        "cost_per_lead": round(spend / leads, 2) if leads else None,
+        "conv_rate": round(leads / clicks * 100, 2) if clicks else None,
+    }
+
+
 def hyros_today(campaign_ids, day):
     """Today's blended webinar registrations, from Hyros rather than the Meta pixel.
 
@@ -565,6 +625,12 @@ def main():
         todays["cost_per_lead"] = None
         todays["conv_rate"] = None
 
+    wk = week_box(live_ids, today) if live_ids else None
+    if wk:
+        print(f"  week {wk['since']} -> {wk['until']}"
+              + (f" (in progress, {wk['elapsed_days']} of {wk['days']} days)" if wk["in_progress"] else "")
+              + f": {wk['leads']} registrations, ${wk['spend']:,.2f}, {wk['link_clicks']} clicks")
+
     snap = {
         "meta": {
             "client": "Photography Business Institute",
@@ -587,6 +653,7 @@ def main():
             ],
         },
         "today": todays,
+        "week": wk,
         "creatives": cr,
         "windows": windows,
     }
