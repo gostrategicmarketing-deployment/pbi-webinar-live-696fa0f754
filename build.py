@@ -475,22 +475,24 @@ def week_html(w):
                           w.get("cost_per_link_click"), w["spend"], w.get("conv_rate"),
                           "Amount spent this week", have)
 
-    day_word = "day" if w["days"] == 1 else "days"
-    if w["starts_today"]:
-        blurb = ("Monday through now. Today is Monday, so the week so far is today: this "
-                 "box and the one above it cover the same hours, and they will diverge "
-                 "from tomorrow.")
-    else:
-        blurb = (f'Monday through now: {w["days"]} {day_word} of the current week, with '
-                 f'today counted as far as it has run.')
+    blurb = (f'Last Monday through the end of this Monday: {w["days"]} days counting both '
+             f'ends, so the cycle opens on one live workshop and closes on the next.')
 
-    note = (f'Week to date, {fmt_day(w["since"])} through {stamp or fmt_day(w["until"])}. '
-            f'Today is partial and still accruing, so this is the week so far rather than '
-            f'a closed week; it resets on Monday. Registrations are Hyros; spend and link '
-            f'clicks are Meta\'s.')
+    if w["closing_today"]:
+        note = (f'<span class="tflag">Closing today</span> This cycle ends tonight, with '
+                f'{fmt_day(w["until"])} counted as far as it has run — currently to '
+                f'{stamp}. It will keep climbing until the day closes, then hold still '
+                f'until next Monday. Registrations are Hyros; spend and link clicks are '
+                f'Meta\'s.')
+    else:
+        note = (f'A complete cycle: {w["days"]} days, {fmt_day(w["since"])} through the end '
+                f'of {fmt_day(w["until"])}. It holds still until next Monday, when it rolls '
+                f'forward a week. Registrations are Hyros; spend and link clicks are '
+                f'Meta\'s.')
 
     return summary_box(f'Weekly summary · {span}',
-                       "Blended webinar registrations", blurb, cells, note, "week")
+                       "Blended webinar registrations", blurb, cells, note,
+                       "week" + (" week-open" if w["closing_today"] else ""))
 
 
 def window_html(key, w, cr, active):

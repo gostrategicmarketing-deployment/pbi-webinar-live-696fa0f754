@@ -455,23 +455,28 @@ def hyros_range(campaign_ids, since, until):
 
 
 def week_box(campaign_ids, today, now):
-    """Week to date: Monday of the current week through today, up to this moment.
+    """Last Monday through the end of the current Monday: eight days, counting both ends.
 
-    The webinar runs on Mondays, so the week opens on the live workshop and the box
-    reports how it has gone since. Today is included and is partial, which is the point:
-    it is the week so far, not a closed cycle.
+    The webinar runs on Mondays, so a cycle opens on one live workshop and closes at the
+    end of the next. `end` is the Monday of the current week and `start` is the Monday
+    before it, so the window spans workshop to workshop.
 
-    The end is never allowed past today. Hyros returns an empty result for a future
-    endDate rather than the data so far, so a window reaching to next Monday reads as
-    zero registrations sitting on live spend.
+    On a Monday that closing day is today, and the box accrues through it. From Tuesday
+    the cycle is complete and holds still all week, then rolls forward on the next Monday.
+
+    The query end never goes past today: Hyros returns an empty result for a future
+    endDate rather than the data so far, so a window reaching into next week would read
+    as zero registrations sitting on live spend.
     """
-    start = today - timedelta(days=today.weekday())     # Monday of the current week
-    end = today
+    end = today - timedelta(days=today.weekday())       # Monday of the current week
+    start = end - timedelta(days=7)                     # the Monday before it
+    api_end = min(end, today)
+    closing_today = end == today
 
-    ids = delivering_campaign_ids(start.isoformat(), end.isoformat()) or campaign_ids
-    hy = hyros_range(ids, start.isoformat(), end.isoformat())
+    ids = delivering_campaign_ids(start.isoformat(), api_end.isoformat()) or campaign_ids
+    hy = hyros_range(ids, start.isoformat(), api_end.isoformat())
 
-    rows = insights("account", start.isoformat(), end.isoformat())
+    rows = insights("account", start.isoformat(), api_end.isoformat())
     spend = round(num(rows[0], "spend"), 2) if rows else 0.0
     clicks = int(num(rows[0], "inline_link_clicks")) if rows else 0
     pixel = int(acts(rows[0]).get(LEAD_ACTION, 0)) if rows else 0
@@ -481,9 +486,10 @@ def week_box(campaign_ids, today, now):
         "since": start.isoformat(),
         "until": end.isoformat(),
         "days": (end - start).days + 1,
+        "api_until": api_end.isoformat(),
+        "closing_today": closing_today,
         "as_of": now.isoformat(timespec="seconds"),
         "tz": now.strftime("%Z"),
-        "starts_today": start == today,     # on a Monday the week so far is one day
         "spend": spend,
         "link_clicks": clicks,
         "cost_per_link_click": round(spend / clicks, 2) if clicks else None,
@@ -641,7 +647,8 @@ def main():
 
     wk = week_box(live_ids, today, now) if live_ids else None
     if wk:
-        print(f"  week to date {wk['since']} -> {wk['until']} ({wk['days']} days): "
+        print(f"  week {wk['since']} -> {wk['until']} ({wk['days']} days, "
+              f"{'closing today' if wk['closing_today'] else 'complete'}): "
               f"{wk['leads']} registrations, ${wk['spend']:,.2f}, {wk['link_clicks']} clicks")
 
     snap = {
