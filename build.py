@@ -465,31 +465,32 @@ def today_html(t):
 
 
 def week_html(w):
-    """The Monday-to-Monday cycle, in the same format as today."""
+    """Week to date, Monday through now, in the same format as today."""
     if not w:
         return ""
     have = bool(w.get("leads"))
     span = f'{fmt_day(w["since"])} – {fmt_day(w["until"])}'
+    stamp = fmt_stamp(w["as_of"], w.get("tz", "")) if w.get("as_of") else ""
     cells = blended_cells(w["leads"], w.get("cost_per_lead"), w["link_clicks"],
                           w.get("cost_per_link_click"), w["spend"], w.get("conv_rate"),
                           "Amount spent this week", have)
 
-    if w["in_progress"]:
-        note = (f'<span class="tflag">In progress</span> This week closes on '
-                f'{fmt_day(w["until"])}. The figures cover {w["elapsed_days"]} of its '
-                f'{w["days"]} days, through {fmt_day(w["api_until"])}, and will keep '
-                f'climbing until it closes. Registrations are Hyros; spend and link '
-                f'clicks are Meta\'s.')
+    day_word = "day" if w["days"] == 1 else "days"
+    if w["starts_today"]:
+        blurb = ("Monday through now. Today is Monday, so the week so far is today: this "
+                 "box and the one above it cover the same hours, and they will diverge "
+                 "from tomorrow.")
     else:
-        note = (f'A complete cycle: {w["days"]} days, {fmt_day(w["since"])} through '
-                f'{fmt_day(w["until"])}. Registrations are Hyros; spend and link clicks '
-                f'are Meta\'s.')
+        blurb = (f'Monday through now: {w["days"]} {day_word} of the current week, with '
+                 f'today counted as far as it has run.')
+
+    note = (f'Week to date, {fmt_day(w["since"])} through {stamp or fmt_day(w["until"])}. '
+            f'Today is partial and still accruing, so this is the week so far rather than '
+            f'a closed week; it resets on Monday. Registrations are Hyros; spend and link '
+            f'clicks are Meta\'s.')
 
     return summary_box(f'Weekly summary · {span}',
-                       "Blended webinar registrations",
-                       "The funnel\'s own cycle: Monday to Monday, eight days counting both "
-                       "ends, so a week opens on one live workshop and closes on the next.",
-                       cells, note, "week" + (" week-open" if w["in_progress"] else ""))
+                       "Blended webinar registrations", blurb, cells, note, "week")
 
 
 def window_html(key, w, cr, active):
