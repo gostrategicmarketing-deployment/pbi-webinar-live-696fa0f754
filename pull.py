@@ -24,6 +24,7 @@ import json
 import os
 import subprocess
 import sys
+from time import sleep
 import urllib.parse
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -79,17 +80,39 @@ def token():
 TOKEN = None
 
 
+def redact(text):
+    """Never let the access token reach stdout. This repo is public, so an unhandled
+    error in CI would otherwise print the token into a world-readable Actions log."""
+    return text.replace(TOKEN, "***") if TOKEN else text
+
+
+def curl(url, tries=3):
+    """A Graph read, retried on transient transport failures.
+
+    curl exit 56 (receive failure) and 52/28 (empty reply, timeout) happen often enough
+    against the Graph API to fail a run for no reason; the hourly build has no one
+    watching it. Errors are raised with the token stripped out.
+    """
+    last = ""
+    for attempt in range(tries):
+        p = subprocess.run(["curl", "-sS", "--fail", "--max-time", "90", url],
+                           capture_output=True, text=True)
+        if p.returncode == 0:
+            return p.stdout
+        last = (p.stderr or p.stdout or "").strip()
+        if p.returncode not in (18, 28, 52, 55, 56) or attempt == tries - 1:
+            break
+        sleep(2 ** attempt)
+    raise RuntimeError(f"Graph request failed: {redact(last)[:200]}")
+
+
 def get(path, params):
     params = dict(params)
     params["access_token"] = TOKEN
     url = f"{API}/{path}?" + urllib.parse.urlencode(params)
-    out = subprocess.run(
-        ["curl", "-sS", "--fail", "--max-time", "90", url],
-        check=True, capture_output=True, text=True,
-    ).stdout
-    d = json.loads(out)
+    d = json.loads(curl(url))
     if "error" in d:
-        raise RuntimeError(d["error"].get("message", d["error"]))
+        raise RuntimeError(redact(str(d["error"].get("message", d["error"]))))
     return d
 
 
@@ -101,13 +124,9 @@ def get_all(path, params):
         nxt = d.get("paging", {}).get("next")
         if not nxt:
             return rows
-        out = subprocess.run(
-            ["curl", "-sS", "--fail", "--max-time", "90", nxt],
-            check=True, capture_output=True, text=True,
-        ).stdout
-        d = json.loads(out)
+        d = json.loads(curl(nxt))
         if "error" in d:
-            raise RuntimeError(d["error"].get("message", d["error"]))
+            raise RuntimeError(redact(str(d["error"].get("message", d["error"]))))
 
 
 def acts(row, key="actions"):

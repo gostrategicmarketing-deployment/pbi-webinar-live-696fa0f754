@@ -69,8 +69,34 @@ jobs:
         with:
           path: _site
 
+      # Pages returns a 503 "No server is currently available" during GitHub incidents,
+      # which failed two runs during the 2026-08-17 partial outage and left the published
+      # page an hour stale each time. The data is already built by this point, so retry
+      # the deploy rather than throwing the run away.
       - id: deployment
         uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      - name: Retry the deploy if Pages was unavailable
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 90
+
+      - id: deployment_retry
+        if: steps.deployment.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      - name: Second retry
+        if: steps.deployment.outcome == 'failure' && steps.deployment_retry.outcome == 'failure'
+        run: sleep 180
+
+      - id: deployment_retry2
+        if: steps.deployment.outcome == 'failure' && steps.deployment_retry.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+
+      - name: Report a deploy that only succeeded on retry
+        if: steps.deployment.outcome == 'failure'
+        run: echo "::warning::Pages deploy failed on the first attempt and succeeded on retry; check githubstatus.com if this repeats."
 
       # GitHub disables cron schedules in repos with no commit activity for 60 days.
       # An empty commit every ~50 days keeps the hourly refresh alive forever.
