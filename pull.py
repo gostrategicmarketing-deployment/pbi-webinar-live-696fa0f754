@@ -25,7 +25,7 @@ import os
 import subprocess
 import sys
 import urllib.parse
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -423,6 +423,116 @@ def hyros_daily(campaign_ids, since, until, cap=31):
     return out
 
 
+# PBI counts a webinar week from noon Central to noon Central on the following Monday:
+# seven days, not eight, because it is noon-to-noon. Central is two hours ahead of the ad
+# account's Los Angeles clock all year, since both zones change over on the same dates,
+# so the boundary always falls on the top of an hour in Meta's hourly buckets.
+WEEK_TZ = ZoneInfo("America/Chicago")
+WEEK_HOUR = 12
+PREV_WEEKS_MAX = 6
+
+
+def week_bounds(now):
+    """The cycle currently open: the noon-Monday boundary just passed, and the next one."""
+    now_c = now.astimezone(WEEK_TZ)
+    monday = now_c.date() - timedelta(days=now_c.weekday())
+    opened = datetime.combine(monday, time(WEEK_HOUR), WEEK_TZ)
+    if now_c < opened:          # before noon on a Monday the open cycle is the earlier one
+        opened -= timedelta(days=7)
+    return opened, opened + timedelta(days=7)
+
+
+def meta_instant_range(opened, closed):
+    """Meta spend and link clicks between two instants, from the hourly breakdown.
+
+    Day-level insights cannot answer a noon boundary, so this reads the 24 hourly buckets
+    per day and keeps the ones inside the window. The buckets are labelled in the ad
+    account's own timezone, which is what `date_start` is keyed to as well.
+    """
+    o = opened.astimezone(ACCOUNT_TZ)
+    c = closed.astimezone(ACCOUNT_TZ)
+    rows = get_all(f"{ACCOUNT}/insights", {
+        "level": "account",
+        "fields": "spend,inline_link_clicks",
+        "breakdowns": "hourly_stats_aggregated_by_advertiser_time_zone",
+        "filtering": json.dumps(
+            [{"field": "campaign.name", "operator": "CONTAIN", "value": CAMPAIGN_MATCH}]),
+        "time_range": json.dumps({"since": o.date().isoformat(), "until": c.date().isoformat()}),
+        "time_increment": 1,
+        "limit": 500,
+    })
+    spend = 0.0
+    clicks = 0
+    hours = 0
+    for r in rows:
+        bucket = r.get("hourly_stats_aggregated_by_advertiser_time_zone", "")
+        try:
+            hour = int(bucket[:2])
+        except ValueError:
+            continue
+        stamp = datetime.combine(date.fromisoformat(r["date_start"]), time(hour), ACCOUNT_TZ)
+        if o <= stamp < c:
+            spend += num(r, "spend")
+            clicks += int(num(r, "inline_link_clicks"))
+            hours += 1
+    return round(spend, 2), clicks, hours
+
+
+def week_cycle(campaign_ids, opened, closed, now, label):
+    """One noon-Monday-to-noon-Monday cycle, on the same five metrics as every other box."""
+    # Never ask either API past now: Hyros returns an empty result for a future endDate
+    # rather than the data so far, which would read as zero on live spend.
+    api_close = min(closed, now)
+    closing_now = closed > now
+
+    spend, clicks, hours = meta_instant_range(opened, api_close)
+
+    ids = campaign_ids
+    day_ids = delivering_campaign_ids(opened.astimezone(ACCOUNT_TZ).date().isoformat(),
+                                      api_close.astimezone(ACCOUNT_TZ).date().isoformat())
+    if day_ids:
+        ids = day_ids
+    hy = hyros_range(ids, opened.isoformat(timespec="seconds"),
+                     api_close.isoformat(timespec="seconds"))
+    leads = hy["leads"] if hy else 0
+
+    return {
+        "label": label,
+        "opened": opened.isoformat(timespec="minutes"),
+        "closed": closed.isoformat(timespec="minutes"),
+        "api_closed": api_close.isoformat(timespec="minutes"),
+        "closing_now": closing_now,
+        # Elapsed comes off the clock. `buckets` is how many hourly rows Meta actually
+        # returned, which is lower whenever an hour had no delivery, so it is not a
+        # measure of progress through the cycle.
+        "elapsed_hours": int((api_close - opened).total_seconds() // 3600),
+        "total_hours": int((closed - opened).total_seconds() // 3600),
+        "buckets": hours,
+        "tz_abbrev": opened.strftime("%Z"),
+        "spend": spend,
+        "link_clicks": clicks,
+        "cost_per_link_click": round(spend / clicks, 2) if clicks else None,
+        "leads": leads,
+        "cost_per_lead": round(spend / leads, 2) if leads else None,
+        "conv_rate": round(leads / clicks * 100, 2) if clicks else None,
+    }
+
+
+def previous_weeks(campaign_ids, opened, now):
+    """Completed cycles before the open one, newest first, back to the program launch."""
+    out = []
+    launch = date.fromisoformat(WINDOW_START)
+    cur = opened
+    for _ in range(PREV_WEEKS_MAX):
+        cur = cur - timedelta(days=7)
+        if (cur + timedelta(days=7)).astimezone(ACCOUNT_TZ).date() <= launch:
+            break                       # cycle closed before the program existed
+        w = week_cycle(campaign_ids, cur, cur + timedelta(days=7), now, "Previous week")
+        if w["spend"] or w["leads"]:
+            out.append(w)
+    return out
+
+
 def delivering_campaign_ids(since, until):
     """Every webinar campaign that actually delivered in this range, per Meta.
 
@@ -452,53 +562,6 @@ def hyros_range(campaign_ids, since, until):
     cost = round(sum(float(r.get("cost") or 0) for r in rows), 2)
     clicks = sum(int(r.get("clicks") or 0) for r in rows)
     return {"leads": leads, "cost": cost, "clicks": clicks}
-
-
-def week_box(campaign_ids, today, now):
-    """Last Monday through the end of the current Monday: eight days, counting both ends.
-
-    The webinar runs on Mondays, so a cycle opens on one live workshop and closes at the
-    end of the next. `end` is the Monday of the current week and `start` is the Monday
-    before it, so the window spans workshop to workshop.
-
-    On a Monday that closing day is today, and the box accrues through it. From Tuesday
-    the cycle is complete and holds still all week, then rolls forward on the next Monday.
-
-    The query end never goes past today: Hyros returns an empty result for a future
-    endDate rather than the data so far, so a window reaching into next week would read
-    as zero registrations sitting on live spend.
-    """
-    end = today - timedelta(days=today.weekday())       # Monday of the current week
-    start = end - timedelta(days=7)                     # the Monday before it
-    api_end = min(end, today)
-    closing_today = end == today
-
-    ids = delivering_campaign_ids(start.isoformat(), api_end.isoformat()) or campaign_ids
-    hy = hyros_range(ids, start.isoformat(), api_end.isoformat())
-
-    rows = insights("account", start.isoformat(), api_end.isoformat())
-    spend = round(num(rows[0], "spend"), 2) if rows else 0.0
-    clicks = int(num(rows[0], "inline_link_clicks")) if rows else 0
-    pixel = int(acts(rows[0]).get(LEAD_ACTION, 0)) if rows else 0
-
-    leads = hy["leads"] if hy else 0
-    return {
-        "since": start.isoformat(),
-        "until": end.isoformat(),
-        "days": (end - start).days + 1,
-        "api_until": api_end.isoformat(),
-        "closing_today": closing_today,
-        "as_of": now.isoformat(timespec="seconds"),
-        "tz": now.strftime("%Z"),
-        "spend": spend,
-        "link_clicks": clicks,
-        "cost_per_link_click": round(spend / clicks, 2) if clicks else None,
-        "meta_pixel_leads": pixel,
-        "hyros": hy,
-        "leads": leads,
-        "cost_per_lead": round(spend / leads, 2) if leads else None,
-        "conv_rate": round(leads / clicks * 100, 2) if clicks else None,
-    }
 
 
 def hyros_today(campaign_ids, day):
@@ -645,11 +708,19 @@ def main():
         todays["cost_per_lead"] = None
         todays["conv_rate"] = None
 
-    wk = week_box(live_ids, today, now) if live_ids else None
+    opened, closed = week_bounds(now)
+    wk = week_cycle(live_ids, opened, closed, now, "This week") if live_ids else None
+    prev = previous_weeks(live_ids, opened, now) if live_ids else []
     if wk:
-        print(f"  week {wk['since']} -> {wk['until']} ({wk['days']} days, "
-              f"{'closing today' if wk['closing_today'] else 'complete'}): "
+        print(f"  week {wk['opened']} -> {wk['closed']} "
+              f"({'open' if wk['closing_now'] else 'complete'}, "
+              f"{wk['elapsed_hours']}/{wk['total_hours']}h): "
               f"{wk['leads']} registrations, ${wk['spend']:,.2f}, {wk['link_clicks']} clicks")
+    for w in prev:
+        print(f"    prev {w['opened'][:16]} -> {w['closed'][:16]}: "
+              f"{w['leads']} registrations, ${w['spend']:,.2f}")
+    if not prev:
+        print("    no completed cycle before this one yet")
 
     snap = {
         "meta": {
@@ -674,6 +745,7 @@ def main():
         },
         "today": todays,
         "week": wk,
+        "prev_weeks": prev,
         "creatives": cr,
         "windows": windows,
     }

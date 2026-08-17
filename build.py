@@ -464,35 +464,87 @@ def today_html(t):
                        "today-stale" if (stale or not have) else "")
 
 
+def fmt_dt(iso, abbrev=""):
+    """'Mon Aug 10, 12:00 PM CDT' from a tz-aware ISO stamp."""
+    dt = datetime.fromisoformat(iso)
+    hour = dt.hour % 12 or 12
+    ampm = "AM" if dt.hour < 12 else "PM"
+    mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][dt.month - 1]
+    return f"{dt.strftime('%a')} {mon} {dt.day}, {hour}:{dt.minute:02d} {ampm} {abbrev}".strip()
+
+
 def week_html(w):
-    """Week to date, Monday through now, in the same format as today."""
+    """The noon-Central Monday cycle, in the same format as today."""
     if not w:
         return ""
     have = bool(w.get("leads"))
-    span = f'{fmt_day(w["since"])} – {fmt_day(w["until"])}'
-    stamp = fmt_stamp(w["as_of"], w.get("tz", "")) if w.get("as_of") else ""
+    tz = w.get("tz_abbrev", "")
+    span = f'{fmt_dt(w["opened"], tz)} – {fmt_dt(w["closed"], tz)}'
     cells = blended_cells(w["leads"], w.get("cost_per_lead"), w["link_clicks"],
                           w.get("cost_per_link_click"), w["spend"], w.get("conv_rate"),
                           "Amount spent this week", have)
 
-    blurb = (f'Last Monday through the end of this Monday: {w["days"]} days counting both '
-             f'ends, so the cycle opens on one live workshop and closes on the next.')
+    blurb = (f'PBI\'s webinar week: noon Central on Monday through noon Central the '
+             f'following Monday, seven days end to end.')
 
-    if w["closing_today"]:
-        note = (f'<span class="tflag">Closing today</span> This cycle ends tonight, with '
-                f'{fmt_day(w["until"])} counted as far as it has run — currently to '
-                f'{stamp}. It will keep climbing until the day closes, then hold still '
-                f'until next Monday. Registrations are Hyros; spend and link clicks are '
-                f'Meta\'s.')
+    if w["closing_now"]:
+        note = (f'<span class="tflag">Open</span> {w["elapsed_hours"]} of '
+                f'{w["total_hours"]} hours counted, through '
+                f'{fmt_dt(w["api_closed"], tz)}. It closes at '
+                f'{fmt_dt(w["closed"], tz)} and will keep climbing until then. '
+                f'Spend and link clicks are sliced from Meta\'s hourly figures so the noon '
+                f'boundary is exact; registrations are Hyros.')
     else:
-        note = (f'A complete cycle: {w["days"]} days, {fmt_day(w["since"])} through the end '
-                f'of {fmt_day(w["until"])}. It holds still until next Monday, when it rolls '
-                f'forward a week. Registrations are Hyros; spend and link clicks are '
-                f'Meta\'s.')
+        note = (f'A complete cycle: {w["total_hours"]} hours, '
+                f'{fmt_dt(w["opened"], tz)} to {fmt_dt(w["closed"], tz)}. '
+                f'Spend and link clicks are sliced from Meta\'s hourly figures so the noon '
+                f'boundary is exact; registrations are Hyros.')
 
     return summary_box(f'Weekly summary · {span}',
                        "Blended webinar registrations", blurb, cells, note,
-                       "week" + (" week-open" if w["closing_today"] else ""))
+                       "week" + (" week-open" if w["closing_now"] else ""))
+
+
+def prev_weeks_html(weeks):
+    """Completed cycles before the open one: the same five figures, one compact row each,
+    so the current week has something to be judged against."""
+    if weeks is None:
+        return ""
+    if not weeks:
+        return """
+  <section class="prevweeks">
+    <h3>Previous weeks</h3>
+    <p class="prev-empty">No completed noon-to-noon cycle before this one yet. The first
+       one closes at noon Central on Monday, and each week will land here as it closes.</p>
+  </section>"""
+
+    rows = "".join(f"""
+      <tr>
+        <td class="name">{e(fmt_dt(w["opened"], w.get("tz_abbrev", "")))}
+            <span class="prev-to">to {e(fmt_dt(w["closed"], w.get("tz_abbrev", "")))}</span></td>
+        <td class="num strong">{n(w["leads"])}</td>
+        <td class="num">{money(w["cost_per_lead"])}</td>
+        <td class="num">{n(w["link_clicks"])}</td>
+        <td class="num">{money(w["cost_per_link_click"])}</td>
+        <td class="num">{money(w["spend"])}</td>
+      </tr>""" for w in weeks)
+
+    return f"""
+  <section class="prevweeks">
+    <h3>Previous weeks</h3>
+    <p class="prev-sub">Each completed noon-Central Monday cycle, newest first, on the same
+       five figures as the box above.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th class="l">Cycle</th><th>Registrations</th><th>Cost / reg.</th>
+          <th>Link clicks</th><th>Cost / link click</th><th>Spent</th>
+        </tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>
+  </section>"""
 
 
 def window_html(key, w, cr, active):
@@ -704,7 +756,8 @@ def build(snap):
         live_count=len(live), matched=len(m["campaigns_matched"]),
         lead_action=e(m["lead_action"]),
         tabs=tabs, windows=wins,
-        today=today_html(snap.get("today")) + week_html(snap.get("week")),
+        today=(today_html(snap.get("today")) + week_html(snap.get("week"))
+               + prev_weeks_html(snap.get("prev_weeks"))),
         logomark=lockup(), swatches=swatches(),
         thin_spend=money(THIN_SPEND, 0), thin_clicks=THIN_LINK_CLICKS,
         featured_n=FEATURED,
@@ -844,6 +897,22 @@ h2 {{
   background: var(--accent); animation: pulse 2.4s ease-in-out infinite;
 }}
 @keyframes pulse {{ 0%,100% {{ opacity: 1; }} 50% {{ opacity: .3; }} }}
+
+/* ---------- previous weeks ---------- */
+/* Deliberately quieter than the two panels above: it is context for the open cycle, not
+   a third headline. Same five figures, one row per closed cycle. */
+.prevweeks {{ margin-top: 26px; }}
+.prevweeks h3 {{
+  margin: 0; font-family: 'Playfair PBI', Georgia, serif; font-weight: 700;
+  font-size: 18px; line-height: 1.2;
+}}
+.prev-sub, .prev-empty {{
+  margin: 6px 0 0; font-size: 13px; color: var(--ink-3); max-width: 74ch;
+}}
+.prevweeks .tablewrap {{ margin-top: 14px; }}
+.prevweeks table {{ font-size: 13px; }}
+.prevweeks td.name {{ min-width: 260px; font-variant-numeric: tabular-nums; }}
+.prev-to {{ display: block; font-size: 11.5px; color: var(--ink-3); margin-top: 1px; }}
 
 /* ---------- controls ---------- */
 .controls {{
