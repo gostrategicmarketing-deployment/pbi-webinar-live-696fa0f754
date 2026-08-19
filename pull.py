@@ -104,6 +104,13 @@ TRANSIENT_HTTP = (429, 500, 502, 503, 504)
 # on the first attempt rather than being retried five times into the same wall.
 TRANSIENT_GRAPH_CODES = (1, 2, 4, 17, 32, 341, 613)
 
+# The throttles, as opposed to Meta's bad minute. These do not clear in three seconds:
+# the app-level bucket (code 4, subcode 1504022) refills over minutes, so the ordinary
+# 3/6/12/24s backoff just spends five attempts inside the same closed window. The
+# 2026-08-19 21:36 run died that way. Throttles get their own, much slower schedule.
+RATE_LIMIT_CODES = (4, 17, 32, 341, 613)
+RATE_LIMIT_WAITS = (60, 150, 300, 300)
+
 
 def graph_error(body):
     """The `error` object out of a Graph response body, or None if there isn't one."""
@@ -115,10 +122,16 @@ def graph_error(body):
 
 
 def http_retryable(status, body):
+    """Retry on a transient status, or on any status carrying a transient Graph code.
+
+    The code is what matters, not the status Meta chose to hang it on: the app rate
+    limit arrives as HTTP 400 on one call and HTTP 403 on the next. Gating the body
+    check on `status == 400` meant the 403 form skipped every retry and killed the run
+    on its first attempt (2026-08-19 21:36). A dead token (code 190) or a bad field
+    (code 100) still carries a code outside the list and still fails immediately.
+    """
     if status in TRANSIENT_HTTP:
         return True
-    if status != 400:
-        return False
     err = graph_error(body) or {}
     return err.get("code") in TRANSIENT_GRAPH_CODES
 
@@ -137,7 +150,7 @@ def curl(url, tries=5):
     Meta's own error code and message in the log when giving up. Errors are raised with
     the token stripped out; this repo is public and the log is world-readable.
     """
-    last = ""
+    last, throttled = "", False
     for attempt in range(tries):
         p = subprocess.run(
             ["curl", "-sS", "--max-time", "90", "-w", "\n%{http_code}", url],
@@ -152,23 +165,33 @@ def curl(url, tries=5):
             last = ("HTTP {} | code {} subcode {} | {}".format(
                 status, err.get("code"), err.get("error_subcode"),
                 err.get("message", body)[:200]))
+            throttled = err.get("code") in RATE_LIMIT_CODES
             if not http_retryable(status, body):
                 break
         else:
             last = (p.stderr or p.stdout or "").strip()
+            throttled = False
             if p.returncode not in TRANSIENT_TRANSPORT:
                 break
 
         if attempt == tries - 1:
             break
-        # 3s, 6s, 12s, 24s, jittered so a retry storm does not resynchronise on Meta.
-        wait = min(45, 3 * 2 ** attempt) * (0.75 + random.random() * 0.5)
+        if throttled:
+            # 60s, 150s, 300s, 300s: a throttled call waits out the bucket instead of
+            # burning its attempts inside it. Worst case one call costs about 13 minutes,
+            # which the hourly schedule absorbs; the alternative is an hour-stale page.
+            base = RATE_LIMIT_WAITS[min(attempt, len(RATE_LIMIT_WAITS) - 1)]
+        else:
+            # 3s, 6s, 12s, 24s for Meta's ordinary bad minute.
+            base = min(45, 3 * 2 ** attempt)
+        # Jittered so a retry storm does not resynchronise on Meta.
+        wait = base * (0.75 + random.random() * 0.5)
         print("    graph retry {}/{} in {:.0f}s after {}".format(
             attempt + 1, tries - 1, wait, redact(last)[:120]), flush=True)
         sleep(wait)
 
-    raise RuntimeError("Graph request failed after {} attempts: {}".format(
-        tries, redact(last)[:300]))
+    raise RuntimeError("Graph request failed after {} attempt{}: {}".format(
+        attempt + 1, "" if attempt == 0 else "s", redact(last)[:300]))
 
 
 def get(path, params):

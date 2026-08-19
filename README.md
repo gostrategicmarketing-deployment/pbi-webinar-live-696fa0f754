@@ -140,9 +140,19 @@ Notes that keep this honest:
   perfectly good request with a 400 or a 502 often enough to have broken roughly one
   hourly run in twenty; `curl --fail` used to collapse those into exit 22, which was not
   in `pull.py`'s retry list and discarded the response body, so the log read only
-  "returned error: 400". `curl()` now reads the status and body, retries 429/5xx and the
-  400s whose Graph error code is transient (1, 2, 4, 17, 32, 341, 613) five times with
-  jittered backoff, and lets a real fault (100 bad field, 190 dead token) fail at once.
+  "returned error: 400". `curl()` now reads the status and body, retries 429/5xx and any
+  response whose Graph error code is transient (1, 2, 4, 17, 32, 341, 613) five times
+  with jittered backoff, and lets a real fault (100 bad field, 190 dead token) fail at
+  once. The code is what decides, not the status: Meta hangs the app rate limit on a 400
+  on one call and a 403 on the next, and while the body check was gated on `status ==
+  400` the 403 form skipped retries entirely and killed the 2026-08-19 21:36 run on its
+  first attempt.
+- Throttles back off on their own, much slower schedule: 60s, 150s, 300s, 300s instead of
+  3s, 6s, 12s, 24s. The app-level bucket (code 4, subcode 1504022) refills over minutes,
+  so the ordinary backoff spends all five attempts inside the same closed window. A
+  throttled call can now cost about 13 minutes, which the hourly schedule absorbs; the
+  job carries a 45-minute timeout so a bad hour cannot hold the `refresh` concurrency
+  group against the next run.
   Hyros reads retry three times for the same reason: an empty result there reads
   downstream as *zero registrations*, so a hiccup would understate the hero silently.
 - GitHub disables cron in repos with no commit activity for 60 days; the workflow's last

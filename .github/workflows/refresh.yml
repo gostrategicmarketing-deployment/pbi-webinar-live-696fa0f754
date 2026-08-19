@@ -33,6 +33,9 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    # A throttled Graph call can back off for ~13 minutes. This is the ceiling on how
+    # long a bad hour may hold the `refresh` concurrency group against the next run.
+    timeout-minutes: 45
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
