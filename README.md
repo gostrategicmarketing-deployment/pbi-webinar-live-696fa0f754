@@ -136,6 +136,15 @@ Notes that keep this honest:
 - `pull.py` and `build.py` now live in **two places**: this folder (canonical) and the
   deploy repo. After editing here, `cp` into `.deploy/` and push; that push itself
   triggers a redeploy.
+- Transient failures are retried rather than allowed to kill a run. Meta answers a
+  perfectly good request with a 400 or a 502 often enough to have broken roughly one
+  hourly run in twenty; `curl --fail` used to collapse those into exit 22, which was not
+  in `pull.py`'s retry list and discarded the response body, so the log read only
+  "returned error: 400". `curl()` now reads the status and body, retries 429/5xx and the
+  400s whose Graph error code is transient (1, 2, 4, 17, 32, 341, 613) five times with
+  jittered backoff, and lets a real fault (100 bad field, 190 dead token) fail at once.
+  Hyros reads retry three times for the same reason: an empty result there reads
+  downstream as *zero registrations*, so a hiccup would understate the hero silently.
 - GitHub disables cron in repos with no commit activity for 60 days; the workflow's last
   step pushes an empty keepalive commit whenever the newest commit is older than 50 days.
 
