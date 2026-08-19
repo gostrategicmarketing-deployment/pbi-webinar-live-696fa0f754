@@ -22,6 +22,7 @@ run into data/, stamped to the hour, keeping the most recent KEEP_SNAPSHOTS.
 
 import json
 import os
+import random
 import subprocess
 import sys
 from time import sleep
@@ -86,24 +87,88 @@ def redact(text):
     return text.replace(TOKEN, "***") if TOKEN else text
 
 
-def curl(url, tries=3):
-    """A Graph read, retried on transient transport failures.
+# curl exits: partial transfer, timeout, empty reply, send failure, receive failure.
+TRANSIENT_TRANSPORT = (18, 28, 52, 55, 56)
 
-    curl exit 56 (receive failure) and 52/28 (empty reply, timeout) happen often enough
-    against the Graph API to fail a run for no reason; the hourly build has no one
-    watching it. Errors are raised with the token stripped out.
+# Graph answers a request that is fine an hour later with one of these often enough to
+# break about one hourly run in twenty. 500/502/503/504 are Meta's own bad minute; 429
+# is the plain rate limit.
+TRANSIENT_HTTP = (429, 500, 502, 503, 504)
+
+# Graph also hides transient conditions under HTTP 400 with the real cause in the body:
+#   1   unknown/temporary   2   service temporarily unavailable
+#   4   app rate limit      17  user request limit reached
+#   32  page rate limit     341 application limit reached
+#   613 calls-per-second limit
+# A genuinely bad request (bad field, dead token) carries a different code and must fail
+# on the first attempt rather than being retried five times into the same wall.
+TRANSIENT_GRAPH_CODES = (1, 2, 4, 17, 32, 341, 613)
+
+
+def graph_error(body):
+    """The `error` object out of a Graph response body, or None if there isn't one."""
+    try:
+        d = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return d.get("error") if isinstance(d, dict) else None
+
+
+def http_retryable(status, body):
+    if status in TRANSIENT_HTTP:
+        return True
+    if status != 400:
+        return False
+    err = graph_error(body) or {}
+    return err.get("code") in TRANSIENT_GRAPH_CODES
+
+
+def curl(url, tries=5):
+    """A Graph read, retried on anything transient: transport *and* HTTP status.
+
+    The earlier version passed `--fail` and retried only on transport-level curl exits.
+    `--fail` collapses every HTTP status into exit 22 and discards the response body, so
+    a throttled or hiccuping Graph call was neither retried nor diagnosable: the log read
+    "curl: (22) The requested URL returned error: 400" and nothing else. Between
+    2026-08-13 and 2026-08-19 that killed the hourly run on a 400 and on a 502, both of
+    which succeeded unchanged the following hour.
+
+    So: read the status and the body, retry the transient ones with backoff, and put
+    Meta's own error code and message in the log when giving up. Errors are raised with
+    the token stripped out; this repo is public and the log is world-readable.
     """
     last = ""
     for attempt in range(tries):
-        p = subprocess.run(["curl", "-sS", "--fail", "--max-time", "90", url],
-                           capture_output=True, text=True)
+        p = subprocess.run(
+            ["curl", "-sS", "--max-time", "90", "-w", "\n%{http_code}", url],
+            capture_output=True, text=True)
+
         if p.returncode == 0:
-            return p.stdout
-        last = (p.stderr or p.stdout or "").strip()
-        if p.returncode not in (18, 28, 52, 55, 56) or attempt == tries - 1:
+            body, _, tail = p.stdout.rpartition("\n")
+            status = int(tail) if tail.strip().isdigit() else 0
+            if status == 200:
+                return body
+            err = graph_error(body) or {}
+            last = ("HTTP {} | code {} subcode {} | {}".format(
+                status, err.get("code"), err.get("error_subcode"),
+                err.get("message", body)[:200]))
+            if not http_retryable(status, body):
+                break
+        else:
+            last = (p.stderr or p.stdout or "").strip()
+            if p.returncode not in TRANSIENT_TRANSPORT:
+                break
+
+        if attempt == tries - 1:
             break
-        sleep(2 ** attempt)
-    raise RuntimeError(f"Graph request failed: {redact(last)[:200]}")
+        # 3s, 6s, 12s, 24s, jittered so a retry storm does not resynchronise on Meta.
+        wait = min(45, 3 * 2 ** attempt) * (0.75 + random.random() * 0.5)
+        print("    graph retry {}/{} in {:.0f}s after {}".format(
+            attempt + 1, tries - 1, wait, redact(last)[:120]), flush=True)
+        sleep(wait)
+
+    raise RuntimeError("Graph request failed after {} attempts: {}".format(
+        tries, redact(last)[:300]))
 
 
 def get(path, params):
@@ -404,14 +469,32 @@ def hyros_call(level, ids, since, until):
         "fields": "leads,cost,clicks",        # lowercase only
         "ids": ",".join(ids),
     })
-    try:
+    # An empty return here is not neutral: it reads downstream as *zero registrations*,
+    # which would quietly understate the hero rather than showing an error. So a
+    # transient Hyros failure is retried before being allowed to degrade, and the reason
+    # is printed so a run of silent zeroes is traceable in the log.
+    reason = "no attempt made"
+    for attempt in range(3):
         out = subprocess.run(
-            ["curl", "-sS", "--fail", "--max-time", "60", "-H", f"API-Key: {key}",
-             f"{HYROS_API}/attribution?{params}"],
-            check=True, capture_output=True, text=True).stdout
-        return json.loads(out).get("result", []) or []
-    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
-        return []
+            ["curl", "-sS", "--max-time", "60", "-w", "\n%{http_code}",
+             "-H", f"API-Key: {key}", f"{HYROS_API}/attribution?{params}"],
+            capture_output=True, text=True)
+        if out.returncode != 0:
+            reason = (out.stderr or "").strip()[:120] or f"curl exit {out.returncode}"
+        else:
+            body, _, tail = out.stdout.rpartition("\n")
+            status = tail.strip()
+            if status == "200":
+                try:
+                    return json.loads(body).get("result", []) or []
+                except json.JSONDecodeError:
+                    reason = f"unparseable body: {body[:120]}"
+            else:
+                reason = f"HTTP {status}: {body[:120]}"
+        if attempt < 2:
+            sleep(2 * 2 ** attempt)
+    print(f"    hyros {level} read failed, treating as no rows: {reason}", flush=True)
+    return []
 
 
 def hyros_by_id(level, ids, since, until, batch=20):
