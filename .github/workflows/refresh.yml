@@ -13,6 +13,7 @@ on:
     branches: [main]
     paths:
       - pull.py
+      - live.html
       - build.py
       - hyros_seed.json
       - fonts/**
@@ -66,7 +67,7 @@ jobs:
         run: python build.py
 
       - name: Assemble the site
-        run: mkdir -p _site && cp index.html robots.txt _site/
+        run: mkdir -p _site && cp index.html robots.txt live.html _site/
 
       - uses: actions/upload-pages-artifact@v3
         with:
