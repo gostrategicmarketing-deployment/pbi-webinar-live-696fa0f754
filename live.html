@@ -1,0 +1,739 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Weekly Webinar Performance — Joy of Marketing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --onyx:#212121; --burgundy:#720C3A; --orchid:#B065C0; --slate:#38C5BA; --citron:#E4E439;
+  --brand-orange:#FF522B; --livid:#EAECEF; --accent:#FF522B; --accent-ink:#B8330F;
+  --video:#38C5BA; --ground:#F7F5F4; --surface:#FFFFFF; --sunk:#EFECEA;
+  --rule:#E1DCD9; --rule-soft:#EDE9E7; --ink:#211E1D; --ink-2:#57504C; --ink-3:#8A817C;
+  --band:#212121; --band-ink:#FFFFFF; --band-ink-2:#B9B2AE; --watch:#8A6A00; --mark:#12A296;
+  --shadow:0 1px 2px rgba(33,30,29,.06), 0 8px 24px -12px rgba(33,30,29,.18);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--ground);color:var(--ink);font-family:"Work Sans","Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased;line-height:1.5}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px 80px}
+h1,h2,h3{font-family:"Playfair Display",Georgia,serif;font-weight:700;letter-spacing:-.01em;margin:0}
+a{color:inherit}
+
+/* ---------- masthead ---------- */
+.band{background:var(--band);color:var(--band-ink)}
+.band .wrap{padding-top:26px;padding-bottom:30px}
+.eyebrow{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--band-ink-2);font-weight:600}
+h1{font-size:clamp(30px,4.6vw,50px);line-height:1.06;margin:10px 0 0}
+h1 em{font-style:normal;display:block;color:var(--brand-orange)}
+.metarow{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-end;margin-top:24px}
+.metaitem{min-width:120px}
+.metaitem .k{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--band-ink-2);font-weight:600}
+.metaitem .v{font-size:14px;font-weight:500;margin-top:3px}
+.spacer{flex:1}
+button.refresh{background:var(--brand-orange);color:#fff;border:0;border-radius:999px;padding:11px 26px;font:600 14px/1 "Work Sans",sans-serif;cursor:pointer;transition:.15s}
+button.refresh:hover:not(:disabled){background:#e6421f}
+button.refresh:disabled{opacity:.55;cursor:default}
+button.ghost{background:transparent;color:var(--band-ink-2);border:1px solid #4a4a4a;border-radius:999px;padding:10px 16px;font:500 12px/1 "Work Sans",sans-serif;cursor:pointer;margin-left:8px}
+button.ghost:hover{color:#fff;border-color:#777}
+
+/* ---------- status ---------- */
+#status{margin-top:16px;font-size:13px;color:var(--band-ink-2);min-height:20px}
+#status.err{color:#FFB3A0}
+.progress{height:2px;background:#3a3a3a;border-radius:2px;overflow:hidden;margin-top:12px;display:none}
+.progress.on{display:block}
+.progress i{display:block;height:100%;background:var(--brand-orange);width:0;transition:width .3s}
+
+/* ---------- sections ---------- */
+section{margin-top:52px}
+.shead{border-bottom:2px solid var(--onyx);padding-bottom:10px;margin-bottom:22px}
+.shead h2{font-size:clamp(21px,2.6vw,28px)}
+.shead .sub{font-size:13px;color:var(--ink-2);margin-top:6px;max-width:70ch}
+.note{font-size:12.5px;color:var(--ink-3);margin-top:14px;max-width:78ch}
+
+/* ---------- KPI ---------- */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:14px}
+.kpi{background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:16px 16px 15px;box-shadow:var(--shadow)}
+.kpi.hero{grid-column:span 2;border-color:var(--brand-orange);border-width:2px}
+.kpi .lab{font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+.kpi .num{font-family:"Playfair Display",Georgia,serif;font-size:clamp(26px,3.4vw,40px);font-weight:700;line-height:1.05;margin:8px 0 4px;font-variant-numeric:tabular-nums}
+.kpi.hero .num{color:var(--brand-orange)}
+.kpi .hint{font-size:11.5px;color:var(--ink-3)}
+@media(max-width:560px){.kpi.hero{grid-column:span 2}}
+
+/* ---------- tabs ---------- */
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:20px}
+.tab{background:var(--sunk);border:1px solid var(--rule);color:var(--ink-2);border-radius:999px;padding:8px 17px;font:600 12.5px/1 "Work Sans",sans-serif;cursor:pointer}
+.tab[aria-selected=true]{background:var(--onyx);color:#fff;border-color:var(--onyx)}
+
+/* ---------- creative cards ---------- */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(196px,1fr));gap:16px}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:12px;overflow:hidden;box-shadow:var(--shadow);display:flex;flex-direction:column}
+.card .thumb{aspect-ratio:1/1;background:var(--sunk);position:relative;overflow:hidden}
+.card .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.card .rank{position:absolute;top:8px;left:8px;background:var(--onyx);color:#fff;font:700 11px/1 "Work Sans";padding:5px 8px;border-radius:6px}
+.card .fmt{position:absolute;top:8px;right:8px;font:600 9.5px/1 "Work Sans";letter-spacing:.08em;text-transform:uppercase;padding:5px 7px;border-radius:5px;background:rgba(255,255,255,.94);color:var(--ink-2)}
+.card .fmt.v{background:var(--video);color:#08302d}
+.card .body{padding:12px 13px 14px}
+.card .nm{font-size:12.5px;font-weight:600;line-height:1.3;word-break:break-word}
+.card .as{font-size:11px;color:var(--ink-3);margin-top:3px}
+.card .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;margin-top:11px;padding-top:11px;border-top:1px solid var(--rule-soft)}
+.card .grid div span{display:block}
+.card .grid .n{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.15}
+.card .grid .l{font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);margin-top:1px}
+.thin{display:inline-block;background:var(--citron);color:#4a4a08;font:700 9px/1 "Work Sans";letter-spacing:.07em;text-transform:uppercase;padding:4px 6px;border-radius:4px;margin-left:6px;vertical-align:middle}
+
+/* ---------- tables ---------- */
+.tbl-wrap{overflow-x:auto;border:1px solid var(--rule);border-radius:12px;background:var(--surface);box-shadow:var(--shadow)}
+table{border-collapse:collapse;width:100%;font-size:13px;min-width:640px}
+th{text-align:right;font:600 10px/1.3 "Work Sans";letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);padding:12px 14px;border-bottom:1px solid var(--rule);white-space:nowrap;background:var(--sunk)}
+th:first-child{text-align:left}
+td{padding:11px 14px;border-bottom:1px solid var(--rule-soft);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td:first-child{text-align:left;white-space:normal;min-width:230px}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:#faf8f7}
+.adcell{display:flex;align-items:center;gap:10px}
+.adcell img{width:38px;height:38px;border-radius:6px;object-fit:cover;background:var(--sunk);flex:none}
+.adcell .t1{font-weight:600;font-size:12.5px;line-height:1.25}
+.adcell .t2{font-size:11px;color:var(--ink-3)}
+.pill{display:inline-block;font:600 9px/1 "Work Sans";letter-spacing:.06em;text-transform:uppercase;padding:3px 5px;border-radius:4px;background:var(--sunk);color:var(--ink-3);margin-left:5px}
+.pill.v{background:var(--video);color:#08302d}
+
+/* ---------- bars ---------- */
+.bars{display:flex;flex-direction:column;gap:7px}
+.bar{display:grid;grid-template-columns:74px 1fr auto;gap:11px;align-items:center;font-size:12px}
+.bar .d{color:var(--ink-3);font-size:11px}
+.bar .track{background:var(--sunk);border-radius:4px;height:20px;overflow:hidden}
+.bar .fill{height:100%;border-radius:4px;background:var(--burgundy)}
+.bar.spend .fill{background:var(--onyx)}
+.bar .val{font-weight:700;font-variant-numeric:tabular-nums;min-width:62px;text-align:right}
+.twocol{display:grid;grid-template-columns:1fr 1fr;gap:34px}
+@media(max-width:760px){.twocol{grid-template-columns:1fr}}
+h3.mini{font-size:14px;font-family:"Work Sans";font-weight:700;letter-spacing:.02em;margin-bottom:4px}
+.mini-sub{font-size:11.5px;color:var(--ink-3);margin-bottom:12px}
+
+/* ---------- method ---------- */
+.method{background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--brand-orange);border-radius:10px;padding:16px 18px;margin-top:22px;font-size:12.5px;color:var(--ink-2)}
+.method b{color:var(--ink)}
+.method p{margin:0 0 9px}
+.method p:last-child{margin:0}
+
+/* ---------- setup dialog ---------- */
+.veil{position:fixed;inset:0;background:rgba(20,18,17,.62);display:none;align-items:center;justify-content:center;z-index:60;padding:20px}
+.veil.on{display:flex}
+.dlg{background:var(--surface);border-radius:14px;max-width:520px;width:100%;padding:26px 26px 22px;box-shadow:0 24px 60px -18px rgba(0,0,0,.5)}
+.dlg h3{font-size:20px;margin-bottom:6px}
+.dlg p{font-size:13px;color:var(--ink-2);margin:0 0 16px}
+.dlg label{display:block;font:600 10.5px/1 "Work Sans";letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin:14px 0 6px}
+.dlg input{width:100%;padding:10px 12px;border:1px solid var(--rule);border-radius:8px;font:400 13px/1.4 ui-monospace,Menlo,monospace;background:var(--ground)}
+.dlg .row{display:flex;gap:10px;margin-top:20px}
+.dlg button{flex:1;border:0;border-radius:999px;padding:11px;font:600 13px/1 "Work Sans";cursor:pointer}
+.dlg .save{background:var(--brand-orange);color:#fff}
+.dlg .cancel{background:var(--sunk);color:var(--ink-2)}
+.dlg small{display:block;font-size:11.5px;color:var(--ink-3);margin-top:14px;line-height:1.5}
+
+.empty{padding:34px;text-align:center;color:var(--ink-3);font-size:13px;background:var(--surface);border:1px dashed var(--rule);border-radius:12px}
+.hidden{display:none!important}
+.palette{display:flex;flex-wrap:wrap;gap:14px;margin-top:20px}
+.sw{font-size:10px;color:var(--ink-3);text-align:center}
+.sw i{display:block;width:52px;height:34px;border-radius:6px;border:1px solid var(--rule);margin-bottom:5px}
+footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--rule);font-size:11.5px;color:var(--ink-3)}
+</style>
+</head>
+<body>
+
+<div class="band">
+  <div class="wrap">
+    <div class="eyebrow">Paid Media Report</div>
+    <h1>Weekly Webinar<em>Performance</em></h1>
+    <div class="metarow">
+      <div class="metaitem"><div class="k">Account</div><div class="v" id="m-acct">Joy of Marketing · 37394393</div></div>
+      <div class="metaitem"><div class="k">Campaigns</div><div class="v" id="m-camp">—</div></div>
+      <div class="metaitem"><div class="k">Data as of</div><div class="v" id="m-when">not loaded</div></div>
+      <div class="spacer"></div>
+      <div>
+        <button class="refresh" id="refresh">Refresh</button>
+        <button class="ghost" id="keys">Keys</button>
+      </div>
+    </div>
+    <div id="status">Click Refresh to pull live numbers from Meta and Hyros.</div>
+    <div class="progress" id="prog"><i></i></div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <section id="sec-today">
+    <div class="shead">
+      <h2>Today · <span id="today-label">—</span></h2>
+      <div class="sub">Every registration Hyros credits today, from every source, against today's ad spend. This is the number to steer on.</div>
+    </div>
+    <div class="kpis" id="kpi-today"></div>
+    <div class="note">Registrations come from the Hyros attribution API under last click, and every registration figure on this page is built the same way, down to the individual creative. Spend and link clicks are Meta's. Note the two clocks: Meta reports on the ad account's America/Los_Angeles day, Hyros on its own −05:00 Central day. The two "today" boundaries sit two hours apart, so late-evening figures can disagree slightly until both days close.</div>
+  </section>
+
+  <section id="sec-week">
+    <div class="shead">
+      <h2>Weekly summary</h2>
+      <div class="sub" id="week-range">—</div>
+    </div>
+    <div class="kpis" id="kpi-week"></div>
+    <div class="note" id="week-note"></div>
+  </section>
+
+  <section id="sec-prev">
+    <div class="shead">
+      <h2>Previous weeks</h2>
+      <div class="sub">Each completed noon-Central Monday cycle, newest first, on the same five figures as the box above.</div>
+    </div>
+    <div class="tbl-wrap"><table id="tbl-prev"><thead><tr><th>Cycle</th><th>Registrations</th><th>Cost / reg.</th><th>Link clicks</th><th>Cost / click</th><th>Spent</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section id="sec-creative">
+    <div class="shead">
+      <h2>Creative performance</h2>
+      <div class="sub">Ranked on registrations first, then cost per registration, then spend. Images and videos are ranked separately so the top of each format is always visible.</div>
+    </div>
+    <div class="tabs" id="tabs" role="tablist">
+      <button class="tab" role="tab" data-win="d3" aria-selected="false">Last 3 days</button>
+      <button class="tab" role="tab" data-win="d7" aria-selected="true">Last 7 days</button>
+      <button class="tab" role="tab" data-win="launch" aria-selected="false">Since launch</button>
+    </div>
+
+    <h3 class="mini">Best images</h3>
+    <div class="mini-sub" id="img-sub">—</div>
+    <div class="cards" id="best-images"></div>
+
+    <h3 class="mini" style="margin-top:34px">Best videos</h3>
+    <div class="mini-sub" id="vid-sub">—</div>
+    <div class="cards" id="best-videos"></div>
+
+    <div class="note">Cards marked <span class="thin">thin data</span> have under $25 spent or under 20 link clicks behind them. Their cost per registration is a single event, not a rate. Read them as candidates to fund, not winners to scale.</div>
+
+    <h3 class="mini" style="margin-top:40px">Day by day</h3>
+    <div class="mini-sub">Spend and registrations per day. The final day is partial: it runs to the moment of the pull, on the ad account's Los Angeles clock.</div>
+    <div class="twocol">
+      <div><div class="mini-sub" id="dayreg-peak">Registrations per day</div><div class="bars" id="bars-reg"></div></div>
+      <div><div class="mini-sub" id="dayspend-peak">Ad spend per day</div><div class="bars" id="bars-spend"></div></div>
+    </div>
+
+    <h3 class="mini" style="margin-top:40px">By campaign</h3>
+    <div class="tbl-wrap" style="margin-top:12px"><table id="tbl-camp"><thead><tr><th>Campaign</th><th>Registrations</th><th>Cost / reg.</th><th>Link clicks</th><th>Cost / click</th><th>Spent</th></tr></thead><tbody></tbody></table></div>
+
+    <h3 class="mini" style="margin-top:40px">Every ad</h3>
+    <div class="mini-sub" id="allads-sub">—</div>
+    <div class="tbl-wrap"><table id="tbl-ads"><thead><tr><th>Ad</th><th>Registrations</th><th>Cost / reg.</th><th>Link clicks</th><th>Cost / click</th><th>Spent</th></tr></thead><tbody></tbody></table></div>
+
+    <div class="method" id="method-win"></div>
+  </section>
+
+  <section id="sec-how">
+    <div class="shead"><h2>How to read this</h2></div>
+    <div class="method">
+      <p><b>Five metrics, everywhere.</b> Registrations, cost per registration, link clicks, cost per link click, and total spent. Every ranking on this page uses them and nothing else, so a video and a still are judged on the same terms.</p>
+      <p><b>One registration number, everywhere.</b> Every registration figure on this page, from the headline down to a single creative, is the Hyros count under last-click attribution. Meta's own Lead pixel is not used for any ranking: it sees only the registrations it can match itself, and it undercounts this funnel by roughly three to one. Using both would put two different answers on one page.</p>
+      <p><b>Scope.</b> Every campaign in Meta ad account 37394393 whose name contains "webinar", matched by name rather than by a fixed ID list, so next week's campaign is picked up without editing anything.</p>
+      <p><b>Link clicks</b> are the clicks that actually left for the landing page (<code>inline_link_clicks</code>). All-clicks runs about 2.4x higher on this account and would flatter both the count and the cost.</p>
+      <p><b>Ranking.</b> Registrations first, then cost per registration, then spend. Volume outranks efficiency on purpose: a single registration on a few dollars produces a spectacular cost and proves nothing. Rates are recomputed from summed components, never averaged across ads.</p>
+      <p><b>Source.</b> Meta Graph API v21.0 and the Hyros attribution API, both read-only, both called live from this browser at the moment you press Refresh. Meta figures are on the ad account's own clock, America/Los_Angeles. Creative thumbnails are pulled fresh each time because Meta's image links are signed and expire. Nothing on this page is estimated, inferred, or cached from an earlier build.</p>
+    </div>
+    <div class="palette" id="palette"></div>
+  </section>
+
+  <footer>Photography Business Institute® · Onyx, Orange &amp; White are the core logomark colorways. Set in Playfair Display &amp; Work Sans, standing in for Knockout, Gunterz &amp; Optika.</footer>
+</div>
+
+<div class="veil" id="veil">
+  <div class="dlg">
+    <h3>API keys</h3>
+    <p>This page talks straight to Meta and Hyros from your browser. It needs one key for each. They are stored only in this browser, on this device.</p>
+    <label>Meta access token</label>
+    <input id="in-meta" type="password" autocomplete="off" spellcheck="false" placeholder="EAA…">
+    <label>Hyros API key</label>
+    <input id="in-hyros" type="password" autocomplete="off" spellcheck="false" placeholder="Hyros API key">
+    <div class="row">
+      <button class="cancel" id="dlg-cancel">Cancel</button>
+      <button class="save" id="dlg-save">Save &amp; refresh</button>
+    </div>
+    <small>Meta: use a long-lived System User token with <code>ads_read</code>. Hyros: Settings → API. Clearing your browser data clears these.</small>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   CONFIG — edit these before publishing.
+   Leave the __PLACEHOLDER__ values as-is to have the page ask
+   for the keys once and keep them in this browser's storage.
+   ============================================================ */
+const CFG = {
+  META_TOKEN     : '__META_ACCESS_TOKEN__',
+  HYROS_KEY      : '__HYROS_API_KEY__',
+  AD_ACCOUNT     : '37394393',
+  ACCOUNT_LABEL  : 'Joy of Marketing',
+  CAMPAIGN_MATCH : 'webinar',
+  ACCOUNT_TZ     : 'America/Los_Angeles',  // Meta reports on this clock
+  CYCLE_TZ       : 'America/Chicago',      // webinar week boundary clock
+  CYCLE_DOW      : 1,                      // Monday
+  CYCLE_HOUR     : 12,                     // noon
+  LAUNCH_DATE    : '2026-08-11',
+  GRAPH          : 'https://graph.facebook.com/v21.0',
+  HYROS          : 'https://api.hyros.com/v1/api/v1.0'
+};
+
+/* ---------- credentials ---------- */
+const isPlaceholder = v => !v || /^__.*__$/.test(v);
+function getCreds(){
+  return {
+    meta : isPlaceholder(CFG.META_TOKEN) ? (localStorage.getItem('pbi_meta_token') || '') : CFG.META_TOKEN,
+    hyros: isPlaceholder(CFG.HYROS_KEY)  ? (localStorage.getItem('pbi_hyros_key')  || '') : CFG.HYROS_KEY
+  };
+}
+
+/* ---------- tz helpers ---------- */
+function partsIn(tz, d){
+  const f = new Intl.DateTimeFormat('en-US',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+  const o = {}; for (const p of f.formatToParts(d)) if (p.type!=='literal') o[p.type]=p.value;
+  return {y:+o.year, m:+o.month, d:+o.day, H:+(o.hour==='24'?'0':o.hour), M:+o.minute, S:+o.second};
+}
+function tzOffsetMs(tz, d){
+  const p = partsIn(tz,d);
+  return Date.UTC(p.y,p.m-1,p.d,p.H,p.M,p.S) - (d.getTime() - d.getMilliseconds());
+}
+/** Instant (Date) for a wall-clock time in a given tz. */
+function zoned(tz,y,m,d,H=0,M=0){
+  let t = Date.UTC(y,m-1,d,H,M,0);
+  for (let i=0;i<3;i++) t = Date.UTC(y,m-1,d,H,M,0) - tzOffsetMs(tz,new Date(t));
+  return new Date(t);
+}
+const ymd  = (tz,d)=>{const p=partsIn(tz,d);return `${p.y}-${String(p.m).padStart(2,'0')}-${String(p.d).padStart(2,'0')}`;};
+const iso  = d => d.toISOString().slice(0,19);
+const addD = (s,n)=>{const [y,m,d]=s.split('-').map(Number);const t=new Date(Date.UTC(y,m-1,d+n));return t.toISOString().slice(0,10);};
+function dowIn(tz,dateStr){const [y,m,d]=dateStr.split('-').map(Number);return new Date(Date.UTC(y,m-1,d)).getUTCDay();}
+function fmtDT(tz,d,withTime=true){
+  const o = {timeZone:tz,weekday:'short',month:'short',day:'numeric'};
+  if (withTime){o.hour='numeric';o.minute='2-digit';o.timeZoneName='short';}
+  return new Intl.DateTimeFormat('en-US',o).format(d);
+}
+function fmtDay(tz,d){return new Intl.DateTimeFormat('en-US',{timeZone:tz,month:'short',day:'numeric'}).format(d);}
+
+/** Start of the webinar cycle containing `now`. */
+function cycleStart(now){
+  const p = partsIn(CFG.CYCLE_TZ, now);
+  let anchor = zoned(CFG.CYCLE_TZ,p.y,p.m,p.d,CFG.CYCLE_HOUR,0);
+  let back = (new Date(Date.UTC(p.y,p.m-1,p.d)).getUTCDay() - CFG.CYCLE_DOW + 7) % 7;
+  let s = new Date(anchor.getTime() - back*864e5);
+  // re-anchor exactly (DST safe)
+  let sp = partsIn(CFG.CYCLE_TZ, s);
+  s = zoned(CFG.CYCLE_TZ, sp.y, sp.m, sp.d, CFG.CYCLE_HOUR, 0);
+  if (s > now) s = new Date(s.getTime() - 7*864e5);
+  sp = partsIn(CFG.CYCLE_TZ, s);
+  return zoned(CFG.CYCLE_TZ, sp.y, sp.m, sp.d, CFG.CYCLE_HOUR, 0);
+}
+const cycleEnd = s => {const p=partsIn(CFG.CYCLE_TZ,new Date(s.getTime()+7*864e5));return zoned(CFG.CYCLE_TZ,p.y,p.m,p.d,CFG.CYCLE_HOUR,0);};
+
+/* ---------- formatting ---------- */
+const nf   = new Intl.NumberFormat('en-US');
+const usd0 = n => '$'+nf.format(Math.round(n));
+const usd2 = n => '$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const cpx  = (c,n) => n>0 ? usd2(c/n) : '—';
+const cpx0 = (c,n) => n>0 ? usd0(c/n) : '—';
+
+/* ---------- fetch plumbing ---------- */
+class ApiError extends Error{constructor(src,msg){super(msg);this.src=src;}}
+
+async function graph(path, params){
+  const u = new URL(CFG.GRAPH + path);
+  Object.entries(params).forEach(([k,v]) => u.searchParams.set(k,v));
+  u.searchParams.set('access_token', getCreds().meta);
+  const r = await fetch(u, {cache:'no-store'});
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok || j.error) throw new ApiError('Meta', (j.error && j.error.message) || ('HTTP '+r.status));
+  return j;
+}
+async function graphAll(path, params){
+  let out = [], j = await graph(path, params), guard = 0;
+  out = out.concat(j.data || []);
+  while (j.paging && j.paging.next && guard++ < 40){
+    const r = await fetch(j.paging.next, {cache:'no-store'});
+    j = await r.json();
+    if (j.error) throw new ApiError('Meta', j.error.message);
+    out = out.concat(j.data || []);
+  }
+  return out;
+}
+
+/**
+ * Hyros attribution. Array params are sent as repeated keys, which is what the
+ * API's Spring binding expects; on a 400 we retry once with comma-joined values.
+ */
+async function hyros(query, joinArrays=false){
+  const u = new URL(CFG.HYROS + '/attribution');
+  for (const [k,v] of Object.entries(query)){
+    if (Array.isArray(v)) { joinArrays ? u.searchParams.set(k, v.join(',')) : v.forEach(x => u.searchParams.append(k,x)); }
+    else u.searchParams.set(k, v);
+  }
+  const r = await fetch(u, {cache:'no-store', headers:{'API-Key': getCreds().hyros}});
+  if (r.status === 400 && !joinArrays) return hyros(query, true);
+  if (!r.ok){
+    let d=''; try { d = (await r.json()).message || ''; } catch(e){}
+    throw new ApiError('Hyros', 'HTTP '+r.status+(d?' — '+d:''));
+  }
+  return r.json();
+}
+
+/** Every ad row Hyros has for the account in a window, keyed by Meta ad id. */
+async function hyrosAdLeads(startISO, endISO){
+  const map = new Map();
+  let pageId = null, guard = 0;
+  do {
+    const q = {
+      attributionModel:'LAST_CLICK', level:'FACEBOOK_AD', ids:[CFG.AD_ACCOUNT],
+      isAdAccountId:'true', timeGroupingOption:'SOURCE_LINK',
+      sourceConfiguration:'ALL_SOURCES', currency:'USD',
+      startDate:startISO, endDate:endISO,
+      fields:['LEADS','COST','CLICKS','NAME'], pageSize:250
+    };
+    if (pageId) q.pageId = pageId;
+    const j = await hyros(q);
+    for (const row of (j.result || [])) map.set(String(row.id), (map.get(String(row.id))||0) + (row.leads||0));
+    pageId = j.nextPageId;
+  } while (pageId && guard++ < 25);
+  return map;
+}
+
+/* ---------- Meta pulls ---------- */
+const AD_FIELDS  = 'ad_id,ad_name,adset_name,campaign_name,campaign_id,spend,inline_link_clicks';
+const FILTER     = JSON.stringify([{field:'campaign.name',operator:'CONTAIN',value:CFG.CAMPAIGN_MATCH}]);
+const CAMP_FILTER= JSON.stringify([{field:'name',operator:'CONTAIN',value:CFG.CAMPAIGN_MATCH}]);
+
+async function metaAds(since, until){
+  const rows = await graphAll(`/act_${CFG.AD_ACCOUNT}/insights`, {
+    level:'ad', fields:AD_FIELDS, time_range:JSON.stringify({since,until}),
+    filtering:FILTER, time_increment:'all_days', limit:'500'
+  });
+  return rows.map(r => ({
+    id: r.ad_id, name: r.ad_name, adset: r.adset_name,
+    campaign: r.campaign_name, campaignId: r.campaign_id,
+    spend: parseFloat(r.spend||0), clicks: parseInt(r.inline_link_clicks||0,10)
+  }));
+}
+async function metaDaily(since, until){
+  const rows = await graphAll(`/act_${CFG.AD_ACCOUNT}/insights`, {
+    level:'account', fields:'spend,inline_link_clicks', time_range:JSON.stringify({since,until}),
+    filtering:FILTER, time_increment:'1', limit:'400'
+  });
+  return rows.map(r => ({date:r.date_start, spend:parseFloat(r.spend||0), clicks:parseInt(r.inline_link_clicks||0,10)}));
+}
+/** Hourly account rows, used to cut the weekly cycle at the exact noon boundary. */
+async function metaHourly(since, until){
+  const rows = await graphAll(`/act_${CFG.AD_ACCOUNT}/insights`, {
+    level:'account', fields:'spend,inline_link_clicks', time_range:JSON.stringify({since,until}),
+    filtering:FILTER, time_increment:'1', limit:'800',
+    breakdowns:'hourly_stats_aggregated_by_advertiser_time_zone'
+  });
+  return rows.map(r => {
+    const hh = parseInt((r.hourly_stats_aggregated_by_advertiser_time_zone||'00:00:00').slice(0,2),10);
+    const [y,m,d] = r.date_start.split('-').map(Number);
+    return {at: zoned(CFG.ACCOUNT_TZ,y,m,d,hh,0), spend:parseFloat(r.spend||0), clicks:parseInt(r.inline_link_clicks||0,10)};
+  });
+}
+/** Per-day registrations in ONE call, grouped by day at campaign level.
+ *  Falls back to a day-by-day sweep if the grouped call is unavailable. */
+async function hyrosDaily(campaignIds, since, until, dates){
+  if (campaignIds.length){
+    try{
+      const j = await hyros({
+        attributionModel:'LAST_CLICK', level:'FACEBOOK_CAMPAIGN', ids:campaignIds,
+        timeGroupingOption:'DAY', sourceConfiguration:'ALL_SOURCES', currency:'USD',
+        startDate:since, endDate:until, fields:['LEADS'], pageSize:250
+      });
+      const byDay = new Map();
+      let dated = 0;
+      for (const r of (j.result || [])){
+        const d = (r.startDate || '').slice(0,10);
+        if (!d) continue;
+        dated++; byDay.set(d, (byDay.get(d)||0) + (r.leads||0));
+      }
+      if (dated) return byDay;
+    }catch(e){ /* fall through */ }
+  }
+  const byDay = new Map();
+  for (const d of dates){
+    const lm = await hyrosAdLeads(d+'T00:00:00', d+'T23:59:59');
+    byDay.set(d, [...lm.values()].reduce((a,b)=>a+b,0));
+  }
+  return byDay;
+}
+
+async function creatives(ids){
+  const out = new Map();
+  for (let i=0;i<ids.length;i+=45){
+    const chunk = ids.slice(i,i+45);
+    try{
+      const j = await graph('/', {ids:chunk.join(','), fields:'name,creative{thumbnail_url,image_url,video_id,object_type}'});
+      for (const [id,v] of Object.entries(j)){
+        const c = v.creative || {};
+        // A video_id, or object_type VIDEO, makes it a video.
+        out.set(id, {thumb: c.image_url || c.thumbnail_url || '', video: !!c.video_id || c.object_type === 'VIDEO'});
+      }
+    }catch(e){ /* thumbnails are cosmetic — never fail the report over them */ }
+  }
+  return out;
+}
+
+/* ---------- shaping ---------- */
+function join(metaRows, leadMap, creativeMap){
+  return metaRows.map(r => {
+    const cr = creativeMap ? creativeMap.get(r.id) : null;
+    const regs = leadMap.get(r.id) || 0;
+    return {...r, regs, thumb: cr?cr.thumb:'', video: cr?cr.video:false,
+            thin: r.spend < 25 || r.clicks < 20};
+  }).sort((a,b) =>
+      b.regs - a.regs                                            // volume first
+   || (a.regs ? (a.spend/a.regs) - (b.spend/b.regs) : 0)          // then efficiency
+   || (a.regs ? b.spend - a.spend : b.clicks - a.clicks)          // zero-reg ads backfill on link clicks
+   || b.spend - a.spend);
+}
+const total = rows => rows.reduce((a,r)=>({regs:a.regs+r.regs, spend:a.spend+r.spend, clicks:a.clicks+r.clicks}), {regs:0,spend:0,clicks:0});
+
+/* ---------- rendering ---------- */
+function kpis(el, t, spendLabel){
+  el.innerHTML = `
+   <div class="kpi hero"><div class="lab">Blended webinar registrations</div>
+     <div class="num">${nf.format(t.regs)}</div><div class="hint">Hyros, all attributed sources</div></div>
+   <div class="kpi"><div class="lab">Cost per registration</div>
+     <div class="num">${cpx(t.spend,t.regs)}</div><div class="hint">Spend ÷ registrations</div></div>
+   <div class="kpi"><div class="lab">Link clicks</div>
+     <div class="num">${nf.format(t.clicks)}</div><div class="hint">Outbound to the page</div></div>
+   <div class="kpi"><div class="lab">Cost per link click</div>
+     <div class="num">${cpx(t.spend,t.clicks)}</div><div class="hint">Spend ÷ link clicks</div></div>
+   <div class="kpi"><div class="lab">Total ad spend</div>
+     <div class="num">${usd2(t.spend)}</div><div class="hint">${spendLabel}</div></div>
+   <div class="kpi"><div class="lab">Conversion rate</div>
+     <div class="num">${t.clicks? (100*t.regs/t.clicks).toFixed(2)+'%' : '—'}</div><div class="hint">Registrations ÷ link clicks</div></div>`;
+}
+function cardHTML(r,i){
+  return `<div class="card">
+    <div class="thumb">${r.thumb?`<img src="${r.thumb}" alt="" loading="lazy">`:''}
+      <div class="rank">${String(i+1).padStart(2,'0')}</div>
+      <div class="fmt ${r.video?'v':''}">${r.video?'Video':'Image'}</div></div>
+    <div class="body">
+      <div class="nm">${esc(r.name)}${r.thin?'<span class="thin">thin data</span>':''}</div>
+      <div class="as">${esc(r.adset)}</div>
+      <div class="grid">
+        <div><span class="n">${nf.format(r.regs)}</span><span class="l">registrations</span></div>
+        <div><span class="n">${cpx0(r.spend,r.regs)}</span><span class="l">per registration</span></div>
+        <div><span class="n">${nf.format(r.clicks)}</span><span class="l">link clicks</span></div>
+        <div><span class="n">${cpx(r.spend,r.clicks)}</span><span class="l">per link click</span></div>
+        <div><span class="n">${usd0(r.spend)}</span><span class="l">spent</span></div>
+      </div></div></div>`;
+}
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function bars(el, items, kind){
+  const peak = Math.max(1, ...items.map(i=>i.v));
+  el.innerHTML = items.map(i => `<div class="bar ${kind==='spend'?'spend':''}">
+      <span class="d">${i.label}</span>
+      <span class="track"><span class="fill" style="width:${Math.max(1.5,100*i.v/peak)}%"></span></span>
+      <span class="val">${kind==='spend'?usd0(i.v):nf.format(i.v)}</span></div>`).join('');
+  return peak;
+}
+function fillTable(tbl, rows){ tbl.querySelector('tbody').innerHTML = rows.join(''); }
+
+/* ---------- state ---------- */
+const S = {windows:{}, daily:[], camp:[], cycle:null, prev:[], active:'d7'};
+
+function renderWindow(key){
+  const w = S.windows[key];
+  if (!w) return;
+  const imgs = w.rows.filter(r=>!r.video), vids = w.rows.filter(r=>r.video);
+  document.getElementById('img-sub').textContent = `${imgs.length} image ads delivered in this window. Ranked by Hyros registrations, then cost per registration.`;
+  document.getElementById('vid-sub').textContent = `${vids.length} video ads delivered in this window, on exactly the same five metrics, so the two formats are directly comparable.`;
+  document.getElementById('best-images').innerHTML = imgs.slice(0,5).map(cardHTML).join('') || '<div class="empty">No image ads delivered in this window.</div>';
+  document.getElementById('best-videos').innerHTML = vids.slice(0,5).map(cardHTML).join('') || '<div class="empty">No video ads delivered in this window.</div>';
+
+  const withRegs = w.rows.filter(r=>r.regs>0).length;
+  const dead = w.rows.filter(r=>r.regs===0).reduce((a,r)=>a+r.spend,0);
+  document.getElementById('allads-sub').textContent =
+    `All ${w.rows.length} ads that delivered in this window. ${withRegs} have produced a registration so far; ${usd2(dead)} of spend sits on ads that have not.`;
+  fillTable(document.getElementById('tbl-ads'), w.rows.map(r => `<tr>
+      <td><div class="adcell">${r.thumb?`<img src="${r.thumb}" alt="" loading="lazy">`:'<img alt="">'}
+        <div><div class="t1">${esc(r.name)}<span class="pill ${r.video?'v':''}">${r.video?'Video':'Image'}</span></div>
+        <div class="t2">${esc(r.adset)}</div></div></div></td>
+      <td>${nf.format(r.regs)}</td><td>${cpx(r.spend,r.regs)}</td>
+      <td>${nf.format(r.clicks)}</td><td>${cpx(r.spend,r.clicks)}</td><td>${usd2(r.spend)}</td></tr>`));
+
+  const byC = {};
+  for (const r of w.rows){ (byC[r.campaign] = byC[r.campaign] || {regs:0,spend:0,clicks:0}); const c=byC[r.campaign]; c.regs+=r.regs; c.spend+=r.spend; c.clicks+=r.clicks; }
+  fillTable(document.getElementById('tbl-camp'), Object.entries(byC).sort((a,b)=>b[1].spend-a[1].spend).map(([n,c]) =>
+    `<tr><td>${esc(n)}</td><td>${nf.format(c.regs)}</td><td>${cpx(c.spend,c.regs)}</td><td>${nf.format(c.clicks)}</td><td>${cpx(c.spend,c.clicks)}</td><td>${usd2(c.spend)}</td></tr>`));
+
+  const days = S.daily.filter(d => d.date >= w.since && d.date <= w.until);
+  const rp = bars(document.getElementById('bars-reg'),  days.map(d=>({label:fmtDay('UTC',new Date(d.date+'T12:00:00Z')), v:d.regs})), 'reg');
+  const sp = bars(document.getElementById('bars-spend'),days.map(d=>({label:fmtDay('UTC',new Date(d.date+'T12:00:00Z')), v:d.spend})), 'spend');
+  document.getElementById('dayreg-peak').textContent   = `Registrations per day · peak ${nf.format(rp)}`;
+  document.getElementById('dayspend-peak').textContent = `Ad spend per day · peak ${usd0(sp)}`;
+
+  const t = total(w.rows);
+  document.getElementById('method-win').innerHTML =
+    `<p><b>Window.</b> ${w.desc} ${w.since} to ${w.until}, ${w.days} day${w.days===1?'':'s'}.</p>
+     <p><b>Reconciliation.</b> Spend and link clicks are summed from the ad rows and equal what Meta reports at account level for the same filter and window. Registrations are the Hyros ad-level rows joined to those ads: ${nf.format(t.regs)} across ${w.rows.length} ads.</p>`;
+}
+
+/* ---------- main ---------- */
+const $ = id => document.getElementById(id);
+let busy = false;
+
+function say(msg, isErr){ const s=$('status'); s.textContent=msg; s.classList.toggle('err',!!isErr); }
+function step(n,of){ const p=$('prog'); p.classList.add('on'); p.firstElementChild.style.width = Math.round(100*n/of)+'%'; }
+function done(){ setTimeout(()=>{$('prog').classList.remove('on'); $('prog').firstElementChild.style.width='0';}, 600); }
+
+async function load(){
+  if (busy) return;
+  const c = getCreds();
+  if (!c.meta || !c.hyros){ openKeys(); return; }
+
+  busy = true; $('refresh').disabled = true; $('refresh').textContent = 'Refreshing…';
+  const N = 9; let n = 0; const tick = m => { say(m); step(++n, N); };
+
+  try{
+    const now = new Date();
+    const todayStr = ymd(CFG.ACCOUNT_TZ, now);
+    const cStart = cycleStart(now), cEnd = cycleEnd(cStart);
+    const launch = CFG.LAUNCH_DATE;
+
+    // Every trailing window is clamped at launch: the older webinar-named
+    // campaigns stop in Oct 2024 and would blend a different era into "this week".
+    const clamp = s => s < launch ? launch : s;
+    const wins = {
+      today : {since:todayStr, until:todayStr, desc:'Today only, on the ad account’s Los Angeles clock.'},
+      d3    : {since:clamp(addD(todayStr,-2)), until:todayStr, desc:'The trailing three days, clamped at launch: what the account is doing right now.'},
+      d7    : {since:clamp(addD(todayStr,-6)), until:todayStr, desc:'The trailing seven days, clamped at launch, matching the weekly webinar cadence.'},
+      launch: {since:launch,                   until:todayStr, desc:'Everything since the weekly webinar program went live.'}
+    };
+
+    tick('Pulling ad-level spend and link clicks from Meta…');
+    const metaByWin = {};
+    for (const k of ['today','d3','d7','launch']) metaByWin[k] = await metaAds(wins[k].since, wins[k].until);
+
+    tick('Pulling registrations from Hyros…');
+    const leadsByWin = {};
+    for (const k of ['today','d3','d7','launch'])
+      leadsByWin[k] = await hyrosAdLeads(wins[k].since+'T00:00:00', wins[k].until+'T23:59:59');
+
+    tick('Fetching creative thumbnails…');
+    const ids = [...new Set(metaByWin.launch.map(r=>r.id))];
+    const cre = await creatives(ids);
+
+    tick('Assembling windows…');
+    for (const k of ['today','d3','d7','launch']){
+      const rows = join(metaByWin[k], leadsByWin[k], cre);
+      const [y1,m1,d1]=wins[k].since.split('-').map(Number), [y2,m2,d2]=wins[k].until.split('-').map(Number);
+      S.windows[k] = {...wins[k], rows, days: Math.round((Date.UTC(y2,m2-1,d2)-Date.UTC(y1,m1-1,d1))/864e5)+1};
+    }
+
+    tick('Slicing the weekly cycle at the noon boundary…');
+    const cycSince = ymd(CFG.ACCOUNT_TZ, cStart), cycUntil = todayStr;
+    let cyc = {regs:0, spend:0, clicks:0}, hoursCounted = 0;
+    try{
+      const hrs = await metaHourly(cycSince, cycUntil);
+      for (const h of hrs) if (h.at >= cStart && h.at < cEnd && h.at <= now){ cyc.spend += h.spend; cyc.clicks += h.clicks; hoursCounted++; }
+    }catch(e){
+      const rows = await metaAds(cycSince, cycUntil);
+      const t = total(rows.map(r=>({...r,regs:0}))); cyc.spend = t.spend; cyc.clicks = t.clicks;
+    }
+    const cycLeads = await hyrosAdLeads(iso(cStart), iso(now));
+    cyc.regs = [...cycLeads.values()].reduce((a,b)=>a+b,0);
+    S.cycle = {start:cStart, end:cEnd, t:cyc, hours:hoursCounted};
+
+    tick('Reading completed cycles…');
+    S.prev = [];
+    let ps = new Date(cStart.getTime() - 7*864e5);
+    const launchInstant = zoned(CFG.CYCLE_TZ, ...launch.split('-').map(Number), 0, 0);
+    let guard = 0;
+    while (ps.getTime() + 7*864e5 > launchInstant.getTime() && guard++ < 12){
+      const pe = new Date(ps.getTime() + 7*864e5);
+      const s = ymd(CFG.ACCOUNT_TZ, ps), u = ymd(CFG.ACCOUNT_TZ, pe);
+      let sp = 0, cl = 0;
+      try{
+        const hrs = await metaHourly(s, u);
+        for (const h of hrs) if (h.at >= ps && h.at < pe){ sp += h.spend; cl += h.clicks; }
+      }catch(e){}
+      const lm = await hyrosAdLeads(iso(ps), iso(pe));
+      const rg = [...lm.values()].reduce((a,b)=>a+b,0);
+      if (sp > 0 || rg > 0) S.prev.push({start:new Date(ps), end:pe, regs:rg, spend:sp, clicks:cl});
+      ps = new Date(ps.getTime() - 7*864e5);
+    }
+
+    tick('Building the daily series…');
+    const md = await metaDaily(launch, todayStr);
+    const liveCampIds = [...new Set(S.windows.launch.rows.map(r=>r.campaignId).filter(Boolean))];
+    const byDay = await hyrosDaily(liveCampIds, launch, todayStr, md.map(d=>d.date));
+    S.daily = md.map(d => ({...d, regs: byDay.get(d.date) || 0}));
+
+    tick('Counting campaigns…');
+    const camps = await graphAll(`/act_${CFG.AD_ACCOUNT}/campaigns`, {fields:'id,name,effective_status', filtering:CAMP_FILTER, limit:'500'});
+    $('m-camp').textContent = `${camps.filter(c=>c.effective_status==='ACTIVE').length} active of ${camps.length} webinar-named`;
+
+    tick('Rendering…');
+    $('m-acct').textContent = `${CFG.ACCOUNT_LABEL} · ${CFG.AD_ACCOUNT}`;
+    $('m-when').textContent = fmtDT(CFG.ACCOUNT_TZ, now);
+    $('today-label').textContent = new Intl.DateTimeFormat('en-US',{timeZone:CFG.ACCOUNT_TZ,month:'short',day:'numeric',year:'numeric'}).format(now);
+    kpis($('kpi-today'), total(S.windows.today.rows), 'Amount spent today');
+    kpis($('kpi-week'), cyc, 'Amount spent this cycle');
+    $('week-range').textContent = `${fmtDT(CFG.CYCLE_TZ,cStart)} – ${fmtDT(CFG.CYCLE_TZ,cEnd)}. PBI's webinar week: noon Central on Monday through noon Central the following Monday, seven days end to end.`;
+    $('week-note').textContent = `${hoursCounted} of 168 hours counted, through ${fmtDT(CFG.CYCLE_TZ,now)}. The cycle closes at ${fmtDT(CFG.CYCLE_TZ,cEnd)} and will keep climbing until then. Spend and link clicks are sliced from Meta's hourly figures so the noon boundary is exact; registrations are Hyros.`;
+
+    fillTable($('tbl-prev'), S.prev.length ? S.prev.map(p =>
+      `<tr><td>${fmtDT(CFG.CYCLE_TZ,p.start)} to ${fmtDT(CFG.CYCLE_TZ,p.end)}</td><td>${nf.format(p.regs)}</td>
+       <td>${cpx(p.spend,p.regs)}</td><td>${nf.format(p.clicks)}</td><td>${cpx(p.spend,p.clicks)}</td><td>${usd2(p.spend)}</td></tr>`)
+      : ['<tr><td colspan="6" style="text-align:center;color:var(--ink-3)">No completed cycle since launch yet.</td></tr>']);
+
+    renderWindow(S.active);
+    say(`Live as of ${fmtDT(CFG.ACCOUNT_TZ, now)}. Press Refresh any time.`);
+  }catch(err){
+    const where = err instanceof ApiError ? err.src : 'Page';
+    say(`${where} error: ${err.message}. ${where==='Meta'?'The access token may have expired — press Keys to replace it.':where==='Hyros'?'Check the Hyros API key under Keys.':''}`, true);
+    console.error(err);
+  }finally{
+    busy = false; $('refresh').disabled = false; $('refresh').textContent = 'Refresh'; done();
+  }
+}
+
+/* ---------- wiring ---------- */
+$('refresh').addEventListener('click', load);
+$('tabs').addEventListener('click', e => {
+  const b = e.target.closest('.tab'); if (!b) return;
+  [...$('tabs').children].forEach(x => x.setAttribute('aria-selected', String(x===b)));
+  S.active = b.dataset.win; renderWindow(S.active);
+});
+function openKeys(){
+  const c = getCreds();
+  $('in-meta').value = c.meta; $('in-hyros').value = c.hyros;
+  $('veil').classList.add('on');
+  if (!c.meta || !c.hyros) say('Add a Meta access token and a Hyros API key to pull live numbers.', true);
+}
+$('keys').addEventListener('click', openKeys);
+$('dlg-cancel').addEventListener('click', () => $('veil').classList.remove('on'));
+$('dlg-save').addEventListener('click', () => {
+  localStorage.setItem('pbi_meta_token', $('in-meta').value.trim());
+  localStorage.setItem('pbi_hyros_key',  $('in-hyros').value.trim());
+  $('veil').classList.remove('on'); load();
+});
+$('veil').addEventListener('click', e => { if (e.target === $('veil')) $('veil').classList.remove('on'); });
+
+document.getElementById('palette').innerHTML = [
+  ['Onyx','--onyx','Pantone 419 C'],['Orange','--brand-orange','Pantone 172 C'],
+  ['Burgundy','--burgundy','Pantone 4074 C'],['Slate','--slate','Pantone 3262 C'],
+  ['Citron','--citron','Pantone 396 C'],['Orchid','--orchid','Pantone 2067 C'],
+  ['Livid Grey','--livid','Pantone 649 C']
+].map(([n,v,p]) => `<div class="sw"><i style="background:var(${v})"></i>${n}<br>${p}</div>`).join('');
+
+if (getCreds().meta && getCreds().hyros) load();
+else say('Press Keys to add your Meta token and Hyros API key, then Refresh.');
+</script>
+</body>
+</html>
