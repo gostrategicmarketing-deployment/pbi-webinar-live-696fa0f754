@@ -625,7 +625,11 @@ def week_cycle(campaign_ids, opened, closed, now, label):
         "label": label,
         "opened": opened.isoformat(timespec="minutes"),
         "closed": closed.isoformat(timespec="minutes"),
-        "api_closed": api_close.isoformat(timespec="minutes"),
+        # Rendered under the cycle's own CDT/CST label, so it has to be carried in
+        # Central. `now` comes off the account's Los Angeles clock, two hours behind, and
+        # shipping it raw made an open week read "through 10:40 AM CDT" at 12:40 CDT:
+        # a boundary report that looked like it had stopped before the noon cap.
+        "api_closed": api_close.astimezone(WEEK_TZ).isoformat(timespec="minutes"),
         "closing_now": closing_now,
         # Elapsed comes off the clock. `buckets` is how many hourly rows Meta actually
         # returned, which is lower whenever an hour had no delivery, so it is not a
