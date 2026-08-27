@@ -1,27 +1,39 @@
 name: refresh
 
-# Pull Meta + Hyros, rebuild the dashboard, deploy it to GitHub Pages.
-# The two API credentials live only in Actions Secrets (FB_TOKEN, HYROS_API_KEY);
-# they reach the scripts as environment variables and never touch the repo or the
-# published page. Both are read-only keys.
+# Pull Meta + Hyros, rebuild the dashboard, deploy it to GitHub Pages, then start the
+# next run thirty minutes on.
+#
+# The two API credentials live only in Actions Secrets (FB_TOKEN, HYROS_API_KEY); they
+# reach the scripts as environment variables and never touch the repo or the published
+# page. Both are read-only keys.
 
 on:
+  # THE SCHEDULE IS THE CHAIN AT THE FOOT OF THIS JOB, NOT THIS CRON.
+  #
+  # GitHub's scheduler does not work on this repo and cannot be made to. Measured
+  # 2026-08-27: on `8 * * * *` the median gap held at 0.96h, but 6% of gaps ran past
+  # 1.9h, every night lost ~2.3h around 23:30 UTC, and the night of 08-26 lost 10.2
+  # hours outright, 23:25Z straight through to 09:34Z. Retiming to `17,47 * * * *`
+  # changed nothing at all: six consecutive slots produced zero runs.
+  #
+  # There is nothing left to fix on this side. The workflow is active, Actions is
+  # enabled, the cron is registered on the default branch, and this is the only repo
+  # on the whole account with a workflow. Scheduled events on free public repos are
+  # best-effort, and these are simply being shed.
+  #
+  # `workflow_dispatch` and `push` are API-driven and fire immediately, every time.
+  # So the job now starts its own successor and the cron below is only a way back in
+  # if that chain is ever broken. Anything that depends on this firing is a bug.
   schedule:
-    # Twice an hour, on minutes nobody else uses.
-    #
-    # This was "8 * * * *" and GitHub kept dropping it. Over the 200 runs to
-    # 2026-08-27 the median gap held at 0.96h but 6% of gaps ran past 1.9h, every
-    # night showed the same ~2.3h hole around 23:30 UTC, and the night of 08-26
-    # lost 10.2 hours outright (23:25Z straight to 09:34Z). Scheduled runs on
-    # public repos are best-effort and are shed under load, and load peaks on the
-    # first minutes of the hour, where nearly every cron in the world is pointed.
-    #
-    # So: off the top of the hour, and twice as many chances to land. This does
-    # not make the schedule reliable, because nothing can. The page's own Refresh
-    # button, which pulls live in the reader's browser, is what makes staleness
-    # optional; this only shortens it for a reader who has no keys.
-    - cron: "17,47 * * * *"
-  workflow_dispatch: {} # run-on-demand from the Actions tab or the GitHub app
+    - cron: "9,39 * * * *"
+
+  workflow_dispatch:
+    inputs:
+      chain:
+        description: Start the next run 30 minutes after this one
+        type: boolean
+        default: true
+
   push:
     branches: [main]
     paths:
@@ -39,8 +51,11 @@ permissions:
   contents: write # keepalive commit only; the site itself deploys via Pages
   pages: write
   id-token: write
+  actions: write # dispatch the next link of the chain
 
-# One refresh at a time, and never cancel a deploy mid-flight.
+# One refresh at a time, and never cancel a deploy mid-flight. GitHub keeps only the
+# newest *pending* run per group, which is what stops several triggers converging into
+# several parallel chains.
 concurrency:
   group: refresh
   cancel-in-progress: false
@@ -48,13 +63,19 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    # A throttled Graph call can back off for ~13 minutes. This is the ceiling on how
-    # long a bad hour may hold the `refresh` concurrency group against the next run.
-    timeout-minutes: 45
+    # 28 minutes of this is the deliberate hold between refreshes. The rest is room for
+    # a throttled Graph call, which can back off for ~13 minutes on its own.
+    timeout-minutes: 60
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # The hold near the foot of this job is measured from here, not from when the
+      # pull finished, so a slow or throttled run eats into its own wait rather than
+      # pushing every later link further and further behind.
+      - name: Mark the start
+        run: echo "RUN_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -117,14 +138,69 @@ jobs:
         run: echo "::warning::Pages deploy failed on the first attempt and succeeded on retry; check githubstatus.com if this repeats."
 
       # GitHub disables cron schedules in repos with no commit activity for 60 days.
-      # An empty commit every ~50 days keeps the hourly refresh alive forever.
-      - name: Keep the schedule alive
+      # An empty commit every ~50 days keeps the fallback cron alive forever.
+      - name: Keep the fallback schedule alive
         run: |
           LAST=$(git log -1 --format=%ct)
           NOW=$(date +%s)
           if [ $(( (NOW - LAST) / 86400 )) -ge 50 ]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit --allow-empty -m "Keep the hourly schedule alive"
+            git commit --allow-empty -m "Keep the fallback schedule alive"
             git push
+          fi
+
+      # --------------------------------------------------------------------- the chain
+      #
+      # Everything above refreshes the page once. These two steps are what make it
+      # happen again in half an hour without asking GitHub's scheduler for anything.
+      #
+      # A run that FAILED still hands on, because a failed pull is exactly when you most
+      # need the next attempt: `!cancelled()` covers success and failure but not a
+      # deliberate cancel, so pressing Cancel stops the chain, which is what that button
+      # ought to mean.
+      - name: Hold until the half hour is up
+        if: ${{ !cancelled() }}
+        run: |
+          TARGET=$((RUN_STARTED + 1680))     # 28 min in; dispatch and startup add the rest
+          NOW=$(date +%s)
+          if [ "$NOW" -lt "$TARGET" ]; then
+            echo "holding $((TARGET - NOW))s to keep the cadence at 30 minutes"
+            sleep $((TARGET - NOW))
+          else
+            echo "this run already took $(( (NOW - RUN_STARTED) / 60 ))m; chaining now"
+          fi
+
+      - name: Start the next link
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Three things can trigger this workflow and they converge. Whoever is already
+          # queued will carry the chain on, and since GitHub keeps only the newest
+          # pending run per concurrency group, dispatching over the top of one would
+          # cancel it and gain nothing.
+          QUEUED=$(gh run list -R "$GITHUB_REPOSITORY" --workflow refresh.yml \
+                     --status queued --json databaseId --jq 'length' || echo 0)
+          if [ "${QUEUED:-0}" -gt 0 ]; then
+            echo "::notice::${QUEUED} run already queued; it carries the chain."
+            exit 0
+          fi
+
+          gh workflow run refresh.yml -R "$GITHUB_REPOSITORY" -f chain=true
+          sleep 15
+
+          # A chain that dies quietly is the one failure that puts the page back where it
+          # started, so it is checked rather than assumed.
+          LIVE=$(gh run list -R "$GITHUB_REPOSITORY" --workflow refresh.yml \
+                   --status queued --json databaseId --jq 'length' || echo 0)
+          BUSY=$(gh run list -R "$GITHUB_REPOSITORY" --workflow refresh.yml \
+                   --status in_progress --json databaseId --jq 'length' || echo 0)
+          if [ "$((LIVE + BUSY))" -gt 0 ]; then
+            echo "::notice::next link is live; the page refreshes again in ~2 minutes."
+          else
+            echo "::error::Dispatched the next link and nothing appeared. The chain is"
+            echo "::error::broken, and the page will now only refresh when the fallback"
+            echo "::error::cron happens to fire. Re-run this workflow to restart it."
+            exit 1
           fi
