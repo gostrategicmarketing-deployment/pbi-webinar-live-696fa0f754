@@ -239,6 +239,43 @@ The cost is that a runner is occupied more or less continuously. Public repos bi
 Actions minutes, so this is free, but it is the honest trade: GitHub will not keep time for
 us, so we keep it ourselves.
 
+**A run held by a concurrency group reports `pending`, not `queued`.** The first version of
+the guard counted only `queued` runs, so it never saw one, and at 15:54Z on 2026-08-27 it
+dispatched straight over a pending push run and cancelled it. Nothing was lost, because the
+run it dispatched built the same commit, but a push that reports "cancelled" reads like a
+failure. The guard now counts every run that has not completed, excluding itself by run id,
+which covers `queued`, `pending`, `waiting` and `requested` alike.
+
+### Watchdog
+
+The chain has one dependency: every run must successfully start the next. Most of the time
+it does, and a run that *fails* still hands on. But a job that hits its 60-minute timeout,
+a cancelled run, or an Actions outage will break the link, and GitHub's cron is not a
+backstop worth having. Left alone, the page would then quietly stop updating.
+
+`chain-watchdog.sh` is what notices. Every ten minutes it asks whether any `refresh` run is
+in flight; if none is, and the newest run is more than 40 minutes old, it dispatches one.
+While the chain is healthy it does nothing at all, so it cannot double the cadence or fight
+the workflow's own concurrency group. It uses the Mac's existing `gh` login, so there is no
+new credential anywhere.
+
+```bash
+"./chain-watchdog.sh" --status   # report what it sees, change nothing
+```
+
+Install (one time):
+
+```bash
+cp "com.philglutting.pbi-webinar-chain.plist" ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.philglutting.pbi-webinar-chain.plist
+```
+
+It logs to `~/Library/Logs/pbi-webinar-chain.log`, and writes there only when it actually
+restarts something, so a silent log is the healthy state.
+
+This is insurance, not the schedule. It only runs while the Mac is awake, which is why it
+is the second line and the chain is the first: `launchd` runs one missed interval on wake,
+so a lid closed overnight costs at most one check.
+
 On-demand from any device: the workflow's **Run workflow** button on the repo's Actions
 tab (or the GitHub mobile app). `refresh.command` on the Mac now does a local pull + build
 for the serve.py preview, then dispatches that same workflow via `gh workflow run`.
@@ -390,6 +427,10 @@ pull.py         Meta Graph + Hyros -> data/YYYY-MM-DDTHH_webinar_snapshot.json
 build.py        snapshot -> index.html (fonts + creatives + live.js inlined)
 live.js         the published page's live refresh: pulls Meta + Hyros in the
                 reader's browser and repaints in place. Mirrors pull.py.
+chain-watchdog.sh   restarts the refresh chain if it ever stops; does nothing
+                while it is healthy
+com.philglutting.pbi-webinar-chain.plist
+                launchd agent that runs the watchdog every 10 minutes
 hyros_seed.json MCP-fetched fallback, self-dating
 data/           one snapshot per pull, newest KEEP_SNAPSHOTS (48) retained
 creative-cache/ downscaled ad creatives, keyed on image identity
