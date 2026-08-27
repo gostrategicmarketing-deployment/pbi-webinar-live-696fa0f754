@@ -152,6 +152,44 @@
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
+  /**
+   * One global ceiling on requests in flight.
+   *
+   * The reason to do this in a browser at all is that it can ask for many things at
+   * once where pull.py, on one thread, asks for them one after another: the same
+   * sequence measured 45s sequentially, which is far too long to sit behind a
+   * button. Unbounded is the opposite mistake, and Meta's app-level bucket takes
+   * minutes to refill once tripped.
+   *
+   * The limit is global rather than per-call on purpose. The pull nests: three
+   * windows run together, each asking for ads and campaigns together, each of those
+   * fanning out into batched Hyros reads. Per-call limits multiply, and six of them
+   * nested three deep is not six requests, it is dozens. One gate that every request
+   * passes through cannot be nested around.
+   *
+   * Only the attempt itself is held. A retry's backoff waits outside the gate, so
+   * one throttled call cannot stall the other five slots for twenty seconds.
+   */
+  var GATE = { limit: 6, active: 0, queue: [] };
+  function gateDrain() {
+    while (GATE.active < GATE.limit && GATE.queue.length) GATE.queue.shift()();
+  }
+  function gate(task) {
+    return new Promise(function (resolve, reject) {
+      GATE.queue.push(function () {
+        GATE.active++;
+        var done = function () { GATE.active--; gateDrain(); };
+        task().then(function (v) { done(); resolve(v); },
+                    function (e) { done(); reject(e); });
+      });
+      gateDrain();
+    });
+  }
+
+  // Reads completed this refresh. With the work running in parallel the phase labels
+  // stop arriving in a tidy order, so the count is what actually shows progress.
+  var READS = { done: 0 };
+
   function qs(params) {
     var u = new URLSearchParams();
     Object.keys(params).forEach(function (k) { u.set(k, params[k]); });
@@ -168,14 +206,14 @@
     for (var attempt = 0; attempt < 4; attempt++) {
       var r, j;
       try {
-        r = await fetch(url, { cache: 'no-store' });
+        r = await gate(function () { return fetch(url, { cache: 'no-store' }); });
         j = await r.json().catch(function () { return {}; });
       } catch (e) {
         lastErr = 'network error';
         await sleep(1500 * Math.pow(2, attempt));
         continue;
       }
-      if (r.ok && !j.error) return j;
+      if (r.ok && !j.error) { READS.done++; return j; }
       var code = j.error && j.error.code;
       lastErr = (j.error && j.error.message) || ('HTTP ' + r.status);
       // A real fault (100 bad field, 190 dead token) fails at once; a throttle waits.
@@ -189,7 +227,8 @@
     var j = await graph(path, params);
     var out = (j.data || []).slice(), guard = 0;
     while (j.paging && j.paging.next && guard++ < 40) {
-      var r = await fetch(j.paging.next, { cache: 'no-store' });
+      var nextUrl = j.paging.next;
+      var r = await gate(function () { return fetch(nextUrl, { cache: 'no-store' }); });
       j = await r.json();
       if (j.error) throw new Error('Meta: ' + j.error.message);
       out = out.concat(j.data || []);
@@ -217,13 +256,20 @@
     var lastErr = 'no attempt made';
     for (var attempt = 0; attempt < 3; attempt++) {
       try {
-        var r = await fetch(url, { cache: 'no-store', headers: { 'API-Key': creds().hyros } });
+        var r = await gate(function () {
+          return fetch(url, { cache: 'no-store', headers: { 'API-Key': creds().hyros } });
+        });
         if (r.ok) {
           var j = await r.json();
+          READS.done++;
           return j.result || [];
         }
         lastErr = 'HTTP ' + r.status;
-        if (r.status === 401 || r.status === 403) break;   // a wrong key will not fix itself
+        // Anything 4xx but a throttle is a permanent answer: a wrong key, or a date
+        // this endpoint will not parse (it rejects a timestamp with no UTC offset).
+        // Retrying spends seconds to fail the same way, and this failure aborts the
+        // whole refresh, so it should arrive fast.
+        if (r.status >= 400 && r.status < 500 && r.status !== 429) break;
       } catch (e) {
         lastErr = 'network error';
       }
@@ -235,10 +281,14 @@
   /** Hyros rejects ids=ALL, so ad reads go in batches, as in pull.py. */
   async function hyrosById(level, ids, since, until, batch) {
     batch = batch || 20;
+    var chunks = [];
+    for (var i = 0; i < ids.length; i += batch) chunks.push(ids.slice(i, i + batch));
+    var results = await Promise.all(chunks.map(function (chunk) {
+      return hyrosCall(level, chunk, since, until);
+    }));
     var out = {};
-    for (var i = 0; i < ids.length; i += batch) {
-      var rows = await hyrosCall(level, ids.slice(i, i + batch), since, until);
-      rows.forEach(function (r) {
+    results.forEach(function (rows) {
+      (rows || []).forEach(function (r) {
         if (!r || typeof r !== 'object') return;
         out[String(r.id)] = {
           leads: parseInt(r.leads || 0, 10),
@@ -246,7 +296,7 @@
           clicks: parseInt(r.clicks || 0, 10)
         };
       });
-    }
+    });
     return out;
   }
 
@@ -333,23 +383,24 @@
   }
 
   async function creativeMap(adIds) {
+    var chunks = [];
+    for (var i = 0; i < adIds.length; i += 40) chunks.push(adIds.slice(i, i + 40));
+    var parts = await Promise.all(chunks.map(function (chunk) {
+      return graph('/', {
+        ids: chunk.join(','),
+        fields: 'id,creative{image_url,thumbnail_url,object_type,video_id}'
+      }).catch(function () { return {}; });     // thumbnails are cosmetic, never fatal
+    }));
     var out = {};
-    for (var i = 0; i < adIds.length; i += 40) {
-      var chunk = adIds.slice(i, i + 40);
-      try {
-        var d = await graph('/', {
-          ids: chunk.join(','),
-          fields: 'id,creative{image_url,thumbnail_url,object_type,video_id}'
-        });
-        Object.keys(d).forEach(function (adId) {
-          var c = (d[adId] && d[adId].creative) || {};
-          out[adId] = {
-            format: (c.video_id || c.object_type === 'VIDEO') ? 'VIDEO' : 'IMAGE',
-            thumb: c.image_url || c.thumbnail_url || ''
-          };
-        });
-      } catch (e) { /* thumbnails are cosmetic: never fail the report over them */ }
-    }
+    parts.forEach(function (d) {
+      Object.keys(d || {}).forEach(function (adId) {
+        var c = (d[adId] && d[adId].creative) || {};
+        out[adId] = {
+          format: (c.video_id || c.object_type === 'VIDEO') ? 'VIDEO' : 'IMAGE',
+          thumb: c.image_url || c.thumbnail_url || ''
+        };
+      });
+    });
     return out;
   }
 
@@ -390,10 +441,23 @@
 
   /* ------------------------------------------------------- the whole pull */
 
-  async function pullWindow(key, since, until, campaignIds, dailyAll, hyDailyAll, say) {
-    say('Reading ' + CFG.window_labels[key].toLowerCase() + ' from Meta');
+  /**
+   * One window's ads and campaigns.
+   *
+   * `daily` is deliberately not built here. The daily strip and the Hyros per-day
+   * reads cover the widest window and are sliced per window by the caller, so three
+   * windows do not ask for the same days three times.
+   */
+  async function pullWindow(key, since, until, campaignIds, say) {
+    say('Reading ' + CFG.window_labels[key].toLowerCase());
 
-    var adRows = await insights('ad', since, until, ',adset_name,ad_id,ad_name');
+    // Ad rows and campaign rows are independent reads.
+    var rows = await Promise.all([
+      insights('ad', since, until, ',adset_name,ad_id,ad_name'),
+      insights('campaign', since, until)
+    ]);
+    var adRows = rows[0], campRows = rows[1];
+
     var ads = adRows.map(function (r) {
       var a = acts(r);
       return Object.assign({
@@ -407,9 +471,15 @@
                  parseInt(fnum(r, 'inline_link_clicks'), 10)));
     });
 
-    say('Reading ' + CFG.window_labels[key].toLowerCase() + ' registrations from Hyros');
-    var hyAds = await hyrosById('facebook_ad', ads.map(function (a) { return a.ad_id; }),
-                                since, until);
+    var winIds = campRows.map(function (r) { return String(r.campaign_id); });
+    if (!winIds.length) winIds = campaignIds;
+
+    var hy = await Promise.all([
+      hyrosById('facebook_ad', ads.map(function (a) { return a.ad_id; }), since, until),
+      hyrosById('facebook_campaign', winIds, since, until)
+    ]);
+    var hyAds = hy[0], hyCamps = hy[1];
+
     ads.forEach(function (a) {
       var h = hyAds[a.ad_id];
       a.leads = h ? h.leads : 0;
@@ -417,10 +487,6 @@
       a.thin = isThin(a);
     });
 
-    var campRows = await insights('campaign', since, until);
-    var winIds = campRows.map(function (r) { return String(r.campaign_id); });
-    if (!winIds.length) winIds = campaignIds;
-    var hyCamps = await hyrosById('facebook_campaign', winIds, since, until);
     var campaigns = campRows.map(function (r) {
       var cid = String(r.campaign_id);
       var leads = (hyCamps[cid] || {}).leads || 0;
@@ -433,19 +499,29 @@
       ads.reduce(function (s, a) { return s + a.leads; }, 0),
       ads.reduce(function (s, a) { return s + a.link_clicks; }, 0));
 
-    var daily = dailyAll.filter(function (d) { return d.date >= since && d.date <= until; })
-      .map(function (d) {
-        return Object.assign({}, d, {
-          leads: hyDailyAll ? (hyDailyAll[d.date] || 0) : 0,
-          hyros: !!hyDailyAll
-        });
-      });
-
     return {
       key: key, since: since, until: until,
       days: dayDiff(since, until) + 1,
-      totals: totals, campaigns: campaigns, daily: daily, ads: rankSort(ads)
+      totals: totals, campaigns: campaigns, daily: [], ads: rankSort(ads)
     };
+  }
+
+  /** Registrations per day. Hyros has no day grouping here, so each day is a call. */
+  async function hyrosDailyMap(campaignIds, since, until) {
+    var count = dayDiff(since, until) + 1;
+    if (count > 31) return null;          // pull.py's cap on the fan-out
+    var days = [];
+    for (var i = 0; i < count; i++) days.push(addDays(since, i));
+    var rows = await Promise.all(days.map(function (d) {
+      return hyrosCall('facebook_campaign', campaignIds, d, d);
+    }));
+    var out = {};
+    days.forEach(function (d, i) {
+      out[d] = (rows[i] || []).reduce(function (a, r) {
+        return a + parseInt((r && r.leads) || 0, 10);
+      }, 0);
+    });
+    return out;
   }
 
   async function weekCycle(campaignIds, opened, closed, now) {
@@ -498,14 +574,27 @@
     var tz = CFG.account_tz;
     var today = ymd(tz, now);
 
-    say('Listing webinar campaigns');
-    var camps = (await graphAll('/' + ACT + '/campaigns',
-      { fields: 'id,name,effective_status', limit: 200 }))
-      .filter(function (c) {
-        return (c.name || '').toLowerCase().indexOf(CFG.campaign_match) !== -1;
-      });
-    var live = camps.filter(function (c) { return c.effective_status === 'ACTIVE'; });
-    var liveIds = (live.length ? live : camps.slice(0, 2)).map(function (c) { return c.id; });
+    // Only the ACTIVE campaigns matter, and asking Meta to filter turns a paged read
+    // of 220 campaigns into a single page of two. Measured: 3.9s down to under half.
+    say('Listing the live webinar campaigns');
+    var live = (await graphAll('/' + ACT + '/campaigns', {
+      fields: 'id,name,effective_status',
+      effective_status: JSON.stringify(['ACTIVE']),
+      limit: 200
+    })).filter(function (c) {
+      return (c.name || '').toLowerCase().indexOf(CFG.campaign_match) !== -1;
+    });
+    var liveIds = live.map(function (c) { return c.id; });
+    if (!liveIds.length) {
+      // Nothing active: fall back to the unfiltered list, as pull.py does, so a
+      // paused week still reports rather than reading as zero everywhere.
+      var all = (await graphAll('/' + ACT + '/campaigns',
+        { fields: 'id,name,effective_status', limit: 200 }))
+        .filter(function (c) {
+          return (c.name || '').toLowerCase().indexOf(CFG.campaign_match) !== -1;
+        });
+      liveIds = all.slice(0, 2).map(function (c) { return c.id; });
+    }
 
     // Trailing windows never reach back before the program launched.
     function back(days) {
@@ -514,36 +603,54 @@
     }
     var spans = { '3d': [back(3), today], '7d': [back(7), today], launch: [CFG.launch, today] };
     var widest = spans.launch[0];
+    var wb = weekBounds(now);
 
-    // The daily strip and Hyros-per-day are pulled once over the widest span and
-    // sliced per window: three separate sweeps would be the same data three times,
-    // and Hyros has no day grouping, so each day is its own call.
-    say('Reading the daily strip from Meta');
-    var dailyAll = await metaDaily(widest, today);
+    // Everything below is independent of everything else below it, so it all goes at
+    // once and the gate decides how much actually flies. Sequentially this stretch was
+    // about forty seconds; the slowest single branch is the launch window.
+    say('Reading Meta and Hyros');
+    var got = await Promise.all([
+      metaDaily(widest, today),                                            // 0
+      hyrosDailyMap(liveIds, widest, today),                               // 1
+      pullWindow('3d', spans['3d'][0], spans['3d'][1], liveIds, say),      // 2
+      pullWindow('7d', spans['7d'][0], spans['7d'][1], liveIds, say),      // 3
+      pullWindow('launch', spans.launch[0], spans.launch[1], liveIds, say),// 4
+      insights('campaign', today, today),                                  // 5
+      weekCycle(liveIds, wb.opened, wb.closed, now)                        // 6
+    ]);
+    var dailyAll = got[0], hyDailyAll = got[1];
+    var windows = { '3d': got[2], '7d': got[3], launch: got[4] };
+    var week = got[6];
 
-    var dayCount = dayDiff(widest, today) + 1;
-    var hyDailyAll = null;
-    if (dayCount <= 31) {
-      hyDailyAll = {};
-      for (var i = 0; i < dayCount; i++) {
-        var d = addDays(widest, i);
-        say('Reading registrations day by day from Hyros (' + (i + 1) + ' of ' + dayCount + ')');
-        var rows = await hyrosCall('facebook_campaign', liveIds, d, d);
-        hyDailyAll[d] = rows.reduce(function (a, r) { return a + parseInt((r && r.leads) || 0, 10); }, 0);
-      }
-    }
+    // The day strip, sliced per window from the one widest read.
+    Object.keys(windows).forEach(function (k) {
+      var w = windows[k];
+      w.daily = dailyAll
+        .filter(function (d) { return d.date >= w.since && d.date <= w.until; })
+        .map(function (d) {
+          return Object.assign({}, d, {
+            leads: hyDailyAll ? (hyDailyAll[d.date] || 0) : 0,
+            hyros: !!hyDailyAll
+          });
+        });
+    });
 
-    var windows = {};
-    for (var k of ['3d', '7d', 'launch']) {
-      windows[k] = await pullWindow(k, spans[k][0], spans[k][1], liveIds, dailyAll, hyDailyAll, say);
-    }
-
-    say('Resolving creatives');
+    // Today's registrations have to wait on today's delivering campaigns, and the
+    // creatives on the full ad list, so these two are the only reads left in sequence.
     var adIds = {};
     Object.keys(windows).forEach(function (k) {
       windows[k].ads.forEach(function (a) { adIds[a.ad_id] = 1; });
     });
-    var cr = await creativeMap(Object.keys(adIds));
+    var todayIds = got[5].map(function (r) { return String(r.campaign_id); });
+    if (!todayIds.length) todayIds = liveIds;
+
+    say('Resolving creatives and today');
+    var last = await Promise.all([
+      creativeMap(Object.keys(adIds)),
+      hyrosRange(todayIds, today, today)
+    ]);
+    var cr = last[0], hyToday = last[1];
+
     Object.keys(windows).forEach(function (k) {
       windows[k].ads.forEach(function (a) {
         a.format = (cr[a.ad_id] || {}).format || 'IMAGE';
@@ -551,12 +658,9 @@
       });
     });
 
-    say('Reading today from Hyros');
-    var dayRow = windows[CFG.default_window].daily.filter(function (d) { return d.date === today; })[0];
-    var todayIds = (await insights('campaign', today, today))
-      .map(function (r) { return String(r.campaign_id); });
-    if (!todayIds.length) todayIds = liveIds;
-    var hyToday = await hyrosRange(todayIds, today, today);
+    var dayRow = windows[CFG.default_window].daily.filter(function (d) {
+      return d.date === today;
+    })[0];
     var tSpend = dayRow ? dayRow.spend : 0;
     var tClicks = dayRow ? dayRow.link_clicks : 0;
     var tLeads = hyToday ? hyToday.leads : 0;
@@ -572,13 +676,9 @@
       hyros_ok: !!hyToday      // whether Hyros answered at all, which greys the box
     };
 
-    say('Reading the open week');
-    var wb = weekBounds(now);
-    var week = await weekCycle(liveIds, wb.opened, wb.closed, now);
-
     return {
       now: now, today: todayBox, week: week, windows: windows,
-      live_count: live.length, matched: camps.length
+      live_count: live.length
     };
   }
 
@@ -956,21 +1056,33 @@
     running = true;
     var started = Date.now();
     ui.busy(true, 'Refreshing');
+    READS.done = 0;
+
+    // The reads run in parallel, so phase labels no longer arrive in a tidy order and
+    // several are in flight at once. A ticking count of completed reads is the honest
+    // progress signal, and it keeps the button from looking hung.
+    var phase = 'Starting';
+    var render = function () {
+      ui.msg(esc(phase) + '… <span class="live-note">' + READS.done
+        + ' reads, straight from Meta and Hyros in this browser</span>');
+    };
+    var tick = setInterval(render, 400);
+
     try {
-      var snap = await pullSnapshot(function (label) {
-        ui.msg(esc(label) + '… <span class="live-note">reading Meta and Hyros directly '
-          + 'from this browser</span>');
-      });
+      var snap = await pullSnapshot(function (label) { phase = label; render(); });
+      clearInterval(tick);
       paint(snap);
       var secs = Math.round((Date.now() - started) / 1000);
       ui.msg('<b>Live</b> — pulled just now, in ' + secs + ' second'
-        + (secs === 1 ? '' : 's') + ', straight from Meta and Hyros, into this browser. '
+        + (secs === 1 ? '' : 's') + ' and ' + READS.done + ' reads, straight from Meta '
+        + 'and Hyros, into this browser. '
         + 'Two things below are still from the <b>' + esc(window.BUILD_STAMP || 'last')
         + '</b> build and say so rather than being repainted: <b>previous weeks</b>, which '
         + 'are closed cycles and do not move, and the <b>Method</b> notes, whose '
         + 'reconciliation audits that Python pull rather than these numbers.');
       ui.busy(false, 'Refresh');
     } catch (err) {
+      clearInterval(tick);
       ui.busy(false, 'Refresh');
       ui.msg('Live refresh failed — ' + esc(err.message) + '. The numbers below are '
         + 'unchanged, from the <b>' + esc(window.BUILD_STAMP || 'last') + '</b> build. '
@@ -987,6 +1099,7 @@
         });
       }
     } finally {
+      clearInterval(tick);
       running = false;
     }
   }

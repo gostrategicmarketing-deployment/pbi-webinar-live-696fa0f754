@@ -153,37 +153,91 @@ passes them through as `LIVE_CFG`, so the scope is defined once rather than twic
 change what `pull.py` reads, change this with it or the live numbers and the built numbers
 will quietly disagree.
 
-Two economies the Python does not make, both producing identical results: the daily strip
-and the Hyros per-day reads are pulled once over the widest window and sliced per window,
-rather than three overlapping sweeps.
+**It is parallel, which `pull.py` is not.** That is the whole reason to run this in a
+browser: `pull.py` is one thread asking for one thing at a time, and the same sequence of
+54 reads measured **45 seconds** that way, which is far too long to sit behind a button.
+Issued concurrently it measures **under 7 seconds**. Three economies, all producing
+identical numbers:
+
+- The daily strip and the Hyros per-day reads cover the widest window once and are sliced
+  per window, rather than three overlapping sweeps.
+- The campaign list asks Meta for `effective_status=["ACTIVE"]`, turning a paged read of
+  220 campaigns into a single page of two: 3.9s down to 0.3s.
+- Everything independent goes at once: all three windows, the daily strip, the per-day
+  reads, today's delivering campaigns and the open week, and within each window the ad and
+  campaign reads, and their two Hyros joins.
+
+The ceiling on requests in flight is **global**, in `gate()`, not per call site. That is
+deliberate: the pull nests three deep, and per-call limits multiply, so six of them nested
+is not six requests but dozens, which is how you trip Meta's app-level bucket and then wait
+minutes for it to refill. Only the attempt is held; a retry's backoff waits outside the
+gate, so one throttled call cannot stall the other five slots.
 
 One rule it does not relax: **a failed Hyros read is not zero registrations.** Hyros
 answering with an error would otherwise repaint the hero as 0 and look like a real
 collapse, so a failed read aborts the whole refresh and leaves every number as it was.
 
+Because that failure is fatal, it has to arrive fast: any 4xx but a throttle is a permanent
+answer and breaks out at once instead of being retried three times. The date format is the
+one to watch. Hyros rejects a timestamp with no UTC offset with
+`"There was a problem processing the date in the request."` and a 400, so the weekly cycle
+sends `2026-08-24T12:00:00-05:00`, never a naive local time. Plain `YYYY-MM-DD` is fine and
+is what the daily and today reads use.
+
 The DOM is patched rather than regenerated: rows and cards are cloned from ones already on
 the page and their cells rewritten, so `build.py` stays the only place this page's markup
 is written.
 
-### Schedule (moved to GitHub Actions 2026-08-14; retimed 2026-08-27)
+### The schedule is a chain, not a cron (2026-08-27)
 
-The deploy repo's own **`refresh` workflow** pulls Meta + Hyros, rebuilds and deploys the
-page on cron `17,47 * * * *`. The Mac plays no part: credentials live in the repo's
-**Actions Secrets** (`FB_TOKEN`, `HYROS_API_KEY`, both read-only), reaching the scripts
-only as env vars during a run.
+The deploy repo's **`refresh` workflow** pulls Meta + Hyros, rebuilds, deploys, then
+**holds until it is 28 minutes old and starts the next run itself**. Credentials live in
+the repo's **Actions Secrets** (`FB_TOKEN`, `HYROS_API_KEY`, both read-only), reaching the
+scripts only as env vars during a run. The Mac plays no part.
 
-**Why twice an hour, and why those minutes.** It was `8 * * * *`, and GitHub kept dropping
-it. Measured over the 200 runs to 2026-08-27: the median gap held at 0.96h, but 6% of gaps
-ran past 1.9h, *every* night showed the same ~2.3h hole around 23:30 UTC, and the night of
-08-26 lost 10.2 hours outright, 23:25Z straight through to 09:34Z. Scheduled runs on public
-repos are best-effort and are shed under load, and load peaks on the first minutes of the
-hour, where nearly every cron is pointed. Moving off the top of the hour and firing twice
-gives two chances to land at two quiet minutes.
+**GitHub's cron does not work on this repo and cannot be made to.** That is measured, not
+inferred:
 
-This makes the schedule *shorter-tailed*, not reliable. Nothing available here can make a
-GitHub cron reliable. What actually removes staleness is the page's own Refresh button
-pulling live in the browser; the schedule only bounds how old the page is for a reader who
-has no keys.
+| Cron | Result |
+|---|---|
+| `8 * * * *` | median gap 0.96h, but 6% of gaps past 1.9h, every night a ~2.3h hole around 23:30 UTC, and 08-26 lost **10.2 hours** outright (23:25Z straight to 09:34Z) |
+| `17,47 * * * *` | **six consecutive slots, zero runs** |
+
+Everything on this side is correct: the workflow is `active`, Actions is enabled, the cron
+is registered on the default branch, and this is the only repo on the whole account with a
+workflow at all. Scheduled events on free public repos are best-effort and these are simply
+being shed. Do not spend another afternoon retiming the cron.
+
+`workflow_dispatch` and `push` are a different code path: they are API calls, they fire
+immediately, and they have never been dropped here. A throwaway two-hop workflow confirmed
+the default `GITHUB_TOKEN` may dispatch this workflow, GitHub's recursion guard
+notwithstanding: hop 2 started **seven seconds** after hop 1 asked for it.
+
+So the job ends with two steps:
+
+1. **Hold until the half hour is up**, measured from the start of the run rather than the
+   end of the work, so a throttled pull eats its own slack instead of pushing every later
+   link further behind.
+2. **Start the next link**, unless a run is already queued, in which case that one carries
+   the chain. A dispatch that produces no run **fails the step loudly** rather than leaving
+   the page quietly frozen, which is the one failure that would put this back where it
+   started.
+
+A run that *failed* still hands on: a failed pull is exactly when the next attempt matters
+most. `!cancelled()` covers success and failure but not a deliberate cancel, so pressing
+Cancel stops the chain, which is what that button ought to mean.
+
+Converging triggers cannot fork it. The dispatch is skipped when something is already
+queued, and GitHub keeps only the newest *pending* run per concurrency group, so a push and
+the fallback cron landing mid-chain collapse back to one.
+
+`schedule` is still declared, on `9,39 * * * *`, purely as a way back in if the chain is
+ever broken. Anything that depends on it firing is a bug. To restart the chain by hand: the
+**Run workflow** button on the Actions tab, or `gh workflow run refresh.yml -R <repo>`.
+
+The cost is that a runner is occupied more or less continuously. Public repos bill no
+Actions minutes, so this is free, but it is the honest trade: GitHub will not keep time for
+us, so we keep it ourselves.
 
 On-demand from any device: the workflow's **Run workflow** button on the repo's Actions
 tab (or the GitHub mobile app). `refresh.command` on the Mac now does a local pull + build
