@@ -861,6 +861,12 @@ def main():
             "timezone": str(ACCOUNT_TZ),
             "timezone_abbrev": now.strftime("%Z"),
             "scope": f"Campaigns whose name contains '{CAMPAIGN_MATCH}'",
+            # Carried literally as well as in prose: the page's live-refresh layer has to
+            # send Meta the same filter this pull used, and parsing it back out of `scope`
+            # would be a second definition waiting to drift.
+            "campaign_match": CAMPAIGN_MATCH,
+            "window_start": WINDOW_START,
+            "week_tz": str(WEEK_TZ),
             "lead_action": LEAD_ACTION,
             "source": "Meta Graph API v21.0 (ads_read)",
             "pulled_at": now.isoformat(timespec="seconds"),

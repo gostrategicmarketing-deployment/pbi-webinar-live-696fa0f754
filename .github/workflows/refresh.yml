@@ -7,12 +7,26 @@ name: refresh
 
 on:
   schedule:
-    - cron: "8 * * * *" # hourly; GitHub may delay scheduled runs a few minutes
+    # Twice an hour, on minutes nobody else uses.
+    #
+    # This was "8 * * * *" and GitHub kept dropping it. Over the 200 runs to
+    # 2026-08-27 the median gap held at 0.96h but 6% of gaps ran past 1.9h, every
+    # night showed the same ~2.3h hole around 23:30 UTC, and the night of 08-26
+    # lost 10.2 hours outright (23:25Z straight to 09:34Z). Scheduled runs on
+    # public repos are best-effort and are shed under load, and load peaks on the
+    # first minutes of the hour, where nearly every cron in the world is pointed.
+    #
+    # So: off the top of the hour, and twice as many chances to land. This does
+    # not make the schedule reliable, because nothing can. The page's own Refresh
+    # button, which pulls live in the reader's browser, is what makes staleness
+    # optional; this only shortens it for a reader who has no keys.
+    - cron: "17,47 * * * *"
   workflow_dispatch: {} # run-on-demand from the Actions tab or the GitHub app
   push:
     branches: [main]
     paths:
       - pull.py
+      - live.js
       - live.html
       - build.py
       - hyros_seed.json

@@ -386,7 +386,7 @@ def swatches():
       </div>""" for name, k, pms, use in rows)
 
 
-def summary_box(flag, title, blurb, cells, note, extra_class=""):
+def summary_box(flag, title, blurb, cells, note, extra_class="", box_id=""):
     """One blended-registrations panel. Today and the weekly summary are the same object
     with different bounds, so they share this renderer rather than drifting apart."""
     hero = cells[0]
@@ -398,7 +398,7 @@ def summary_box(flag, title, blurb, cells, note, extra_class=""):
         </div>""" for label, value, defn in cells[1:])
 
     return f"""
-  <section class="today {extra_class}">
+  <section class="today {extra_class}" id="{box_id}">
     <div class="today-head">
       <span class="today-flag">{flag}</span>
       <h2>{e(title)}</h2>
@@ -461,7 +461,7 @@ def today_html(t):
                        "Every registration Hyros credits today, from every source, against "
                        "today\'s ad spend. This is the number to steer on.",
                        cells, note,
-                       "today-stale" if (stale or not have) else "")
+                       "today-stale" if (stale or not have) else "", "box-today")
 
 
 def fmt_dt(iso, abbrev=""):
@@ -503,7 +503,7 @@ def week_html(w):
 
     return summary_box(f'Weekly summary · {span}',
                        "Blended webinar registrations", blurb, cells, note,
-                       "week" + (" week-open" if w["closing_now"] else ""))
+                       "week" + (" week-open" if w["closing_now"] else ""), "box-week")
 
 
 def prev_weeks_html(weeks):
@@ -581,10 +581,11 @@ def window_html(key, w, cr, active):
     <section class="{'sec-video' if fmt == 'VIDEO' else 'sec-image'}">
       <div class="sec-head">
         <h2>{title}</h2>
-        <p>{blurb} {pool_n} {fmt.lower()} ad{'s' if pool_n != 1 else ''} delivered in this window.
+        <p>{blurb} <span id="pool-{key}-{fmt.lower()}">{pool_n}</span> {fmt.lower()}
+           ad{'s' if pool_n != 1 else ''} delivered in this window.
            Click any ad to see the full creative, its copy, and its numbers.</p>
       </div>
-      <div class="cards">{cards}</div>
+      <div class="cards" id="cards-{key}-{fmt.lower()}">{cards}</div>
     </section>"""
 
     thin_note = ""
@@ -595,7 +596,7 @@ def window_html(key, w, cr, active):
                      f'candidates to fund, not as winners to scale.</p>')
 
     camp_rows = "".join(f"""
-      <tr>
+      <tr data-key="{e(c['campaign_id'])}">
         <td class="name">{e(c['campaign_name'])}</td>
         <td class="num strong">{n(c['leads'])}</td>
         <td class="num">{money(c['cost_per_lead'])}</td>
@@ -612,7 +613,7 @@ def window_html(key, w, cr, active):
     # ranked on, and 64 rows of bare numerals hide where the mass actually sits.
     top_leads = max((a["leads"] for a in ads), default=0) or 1
     table_rows = "".join(f"""
-      <tr{' class="zero"' if not a['leads'] else ''}>
+      <tr data-key="{e(a['ad_id'])}"{' class="zero"' if not a['leads'] else ''}>
         <td class="cell-thumb">{thumb_button(a, cr)}</td>
         <td class="name" title="{e(a['ad_name'])}">
           <span class="ad-name">{e(short_name(a['ad_name']))}<span class="fmt fmt-{a.get('format','IMAGE').lower()}">{'Video' if a.get('format') == 'VIDEO' else 'Image'}</span></span>
@@ -642,7 +643,7 @@ def window_html(key, w, cr, active):
         <p>Spend and leads per day. The final day is partial: it runs to the moment of the
            pull, on the ad account's Los Angeles clock.</p>
       </div>
-      <div class="days">{days}</div>
+      <div class="days" id="days-{key}">{days}</div>
     </section>
 
     <section>
@@ -653,7 +654,7 @@ def window_html(key, w, cr, active):
             <th class="l">Campaign</th><th>Registrations</th><th>Cost / reg.</th>
             <th>Link clicks</th><th>Cost / link click</th><th>Spent</th>
           </tr></thead>
-          <tbody>{camp_rows}</tbody>
+          <tbody id="camp-{key}">{camp_rows}</tbody>
         </table>
       </div>
     </section>
@@ -661,9 +662,10 @@ def window_html(key, w, cr, active):
     <section>
       <div class="sec-head">
         <h2>Every ad</h2>
-        <p>All {len(ads)} ads that delivered in this window, ranked the same way.
-           {lead_ads} have produced a registration so far; {zero_spend} of spend sits on ads
-           that have not. Click a thumbnail to open the creative.</p>
+        <p>All <span id="ads-n-{key}">{len(ads)}</span> ads that delivered in this window,
+           ranked the same way. <span id="lead-n-{key}">{lead_ads}</span> have produced a
+           registration so far; <span id="zero-spend-{key}">{zero_spend}</span> of spend sits
+           on ads that have not. Click a thumbnail to open the creative.</p>
       </div>
       <div class="tablewrap">
         <table>
@@ -671,7 +673,7 @@ def window_html(key, w, cr, active):
             <th class="l"></th><th class="l">Ad</th><th>Registrations</th><th>Cost / reg.</th>
             <th>Link clicks</th><th>Cost / link click</th><th>Spent</th>
           </tr></thead>
-          <tbody>{table_rows}</tbody>
+          <tbody id="ads-{key}">{table_rows}</tbody>
         </table>
       </div>
     </section>
@@ -685,6 +687,17 @@ def window_html(key, w, cr, active):
       </ul>
     </div>
   </div>"""
+
+
+def live_js():
+    """The live-refresh layer, injected verbatim.
+
+    Kept as its own file rather than inlined into PAGE so it stays editable JavaScript
+    instead of a brace-doubled string, and so `node --check live.js` can vet it without
+    building the page first.
+    """
+    f = HERE / "live.js"
+    return f.read_text() if f.exists() else "/* live.js missing: Refresh stays static */"
 
 
 def build(snap):
@@ -763,6 +776,24 @@ def build(snap):
         featured_n=FEATURED,
         payload=json.dumps(payload, separators=(",", ":")),
         thumbs=json.dumps(thumbs, separators=(",", ":")),
+        livejs=live_js(),
+        # Everything the in-browser pull needs to reproduce pull.py's filter and windows.
+        # Read off the snapshot rather than restated here, so the live numbers and the
+        # built numbers cannot come from two different definitions of the same scope.
+        live_cfg=json.dumps({
+            "account_id": m["account_id"],
+            "campaign_match": m.get("campaign_match", "webinar"),
+            "lead_action": m["lead_action"],
+            "account_tz": m.get("timezone", "America/Los_Angeles"),
+            "week_tz": m.get("week_tz", "America/Chicago"),
+            "launch": m.get("window_start")
+                      or snap["windows"].get("launch", {}).get("since"),
+            "default_window": default,
+            "window_labels": {k: snap["windows"][k]["label"] for k in order},
+            "thin_spend": THIN_SPEND,
+            "thin_clicks": THIN_LINK_CLICKS,
+            "featured_n": FEATURED,
+        }, separators=(",", ":")),
         default=default,
         build_stamp=e(fmt_stamp(m["pulled_at"], m.get("timezone_abbrev", ""))),
     )
@@ -944,6 +975,55 @@ h2 {{
 }}
 .refresh-msg a {{ color: var(--band-ink); }}
 .refresh-msg.bad {{ border-left-color: #E5484D; }}
+.refresh-msg .live-note {{ color: var(--band-ink-2); opacity: .8; }}
+
+/* The secondary control. It only ever opens the key dialog, so it stays quiet next to
+   the button that actually does the work. */
+.ghost {{
+  appearance: none; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  padding: 11px 16px; border-radius: 3px; letter-spacing: .01em;
+  background: transparent; color: var(--band-ink-2); border: 1px solid rgba(255,255,255,.24);
+  transition: color .15s ease, border-color .15s ease;
+}}
+.ghost:hover {{ color: #fff; border-color: rgba(255,255,255,.5); }}
+.ghost:focus-visible {{ outline: 2px solid #fff; outline-offset: 2px; }}
+
+/* Once a live pull has landed, the masthead stamp stops meaning "the build" and starts
+   meaning "just now", so it is marked rather than left to be read the old way. */
+.band .live b::after {{ content: ''; }}
+body.is-live .band .live b::after {{
+  content: ' · live'; color: var(--accent); font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; font-size: .78em;
+}}
+
+/* ---------- key dialog ---------- */
+.keyveil {{
+  position: fixed; inset: 0; z-index: 60; display: grid; place-items: center;
+  background: rgba(20,18,17,.72); padding: 24px;
+}}
+.keyveil[hidden] {{ display: none; }}
+.keybox {{
+  background: var(--surface); color: var(--ink); border-radius: 6px;
+  padding: 28px 30px 24px; width: min(520px, 100%); box-shadow: 0 24px 70px rgba(0,0,0,.4);
+}}
+.keybox h3 {{ margin: 0 0 10px; font-size: 21px; }}
+.keybox p {{ margin: 0 0 18px; font-size: 13.5px; color: var(--ink-2); line-height: 1.6; }}
+.keybox label {{
+  display: block; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
+  font-weight: 700; color: var(--ink-3); margin: 14px 0 6px;
+}}
+.keybox input {{
+  width: 100%; font: inherit; font-size: 14px; padding: 11px 12px;
+  border: 1px solid var(--rule); border-radius: 3px; background: var(--sunk); color: var(--ink);
+}}
+.keybox input:focus {{ outline: 2px solid var(--accent); outline-offset: 1px; }}
+.keyrow {{ display: flex; gap: 10px; justify-content: flex-end; margin-top: 22px; flex-wrap: wrap; }}
+.keyrow .spacer {{ flex: 1; }}
+.keybox .btn-forget {{
+  appearance: none; font: inherit; font-size: 13px; cursor: pointer; padding: 11px 14px;
+  background: transparent; border: 0; color: var(--ink-3); text-decoration: underline;
+}}
+.keybox small {{ display: block; margin-top: 16px; font-size: 12px; color: var(--ink-3); line-height: 1.6; }}
 
 /* ---------- window tabs ---------- */
 .winbar {{
@@ -1425,7 +1505,7 @@ td.name {{ min-width: 240px; }}
   .logo-screen {{ display: none; }}
   .logo-print {{ display: block; }}
   .lockup-rule {{ background: #ccc; }}
-  .controls, .refresh, .refresh-msg, .winbar, .lb {{ display: none !important; }}
+  .controls, .refresh, .refresh-msg, .winbar, .lb, .keyveil {{ display: none !important; }}
   /* Print every window, each labelled, rather than only whichever tab was open. */
   .win[hidden] {{ display: block !important; }}
   .win::before {{
@@ -1462,14 +1542,15 @@ td.name {{ min-width: 240px; }}
     <h1>Weekly Webinar<br>Performance</h1>
     <p class="band-meta">
       <span>Account <b>{account}</b> · {account_id}</span>
-      <span>Campaigns <b>{live_count} active</b> of {matched} webinar-named</span>
-      <span class="live">Updated <b>{stamp}</b></span>
+      <span>Campaigns <b id="band-campaigns">{live_count} active</b> of {matched} webinar-named</span>
+      <span class="live">Updated <b id="stamp">{stamp}</b></span>
     </p>
     <div class="controls">
       <button class="refresh" id="refresh" type="button">
         <span class="refresh-ico" aria-hidden="true"></span>
         <span id="refresh-text">Refresh</span>
       </button>
+      <button class="ghost" id="livebtn" type="button" hidden>Live data keys</button>
     </div>
     <p class="refresh-msg" id="refresh-msg" hidden></p>
   </div>
@@ -1548,19 +1629,57 @@ td.name {{ min-width: 240px; }}
   </div>
 </div>
 
+<div class="keyveil" id="keyveil" hidden role="dialog" aria-modal="true" aria-labelledby="key-title">
+  <div class="keybox">
+    <h3 id="key-title">Live data keys</h3>
+    <p>This page is a static file: it holds no credentials, because the repository that
+       publishes it is public. Enter your own read-only keys and Refresh will call Meta and
+       Hyros <b>directly from this browser</b> instead of waiting for the next scheduled
+       build. The keys are stored on this device only, are sent to nobody but Meta and
+       Hyros, and never reach the repository or the published page.</p>
+    <label for="key-meta">Meta access token</label>
+    <input id="key-meta" type="password" autocomplete="off" spellcheck="false" placeholder="EAA…">
+    <label for="key-hyros">Hyros API key</label>
+    <input id="key-hyros" type="password" autocomplete="off" spellcheck="false" placeholder="Hyros API key">
+    <div class="keyrow">
+      <button class="btn-forget" id="key-forget" type="button">Forget these keys</button>
+      <span class="spacer"></span>
+      <button class="btn" id="key-cancel" type="button">Cancel</button>
+      <button class="btn btn-primary" id="key-save" type="button">Save and refresh</button>
+    </div>
+    <small>Meta: the same read-only system-user token with <code>ads_read</code> the build
+       uses. Hyros: Settings → API, scoped to the PBI account. Clearing this browser's site
+       data clears both.</small>
+  </div>
+</div>
+
 <script>
+const LIVE_CFG = {live_cfg};
 const ADS = {payload};
 const THUMBS = {thumbs};
 let WIN = "{default}";
 const BUILD_STAMP = "{build_stamp}";
 
-// The Refresh button has two jobs because the page has two homes.
+// A `const` at the top of a classic script lands in the global lexical scope, not on
+// `window`. live.js is a separate script and reads these off `window`, so they are
+// published there deliberately instead of relying on that distinction.
+window.LIVE_CFG = LIVE_CFG;
+window.ADS = ADS;
+window.THUMBS = THUMBS;
+window.BUILD_STAMP = BUILD_STAMP;
+
+// The Refresh button has three jobs because the page has three homes.
 //
 // Served by serve.py, POST /refresh re-pulls Meta, rebuilds and publishes: one click,
-// a few seconds, done. The published copy on GitHub Pages is a static file with no way
-// to reach Meta, and giving it one would mean shipping an ads token into a public page,
-// so there the button re-checks for a newer published build; a launchd job on the Mac
-// republishes hourly, so a newer build is normally at most an hour away.
+// a few seconds, done.
+//
+// On the published copy the page is a static file and cannot hold a credential, because
+// the repository is public. So it asks the *reader* for one: with keys saved in this
+// browser (live.js, localStorage, this device only) Refresh calls Meta and Hyros itself
+// and repaints in place, which is the only path that is never stale.
+//
+// Without keys it falls back to its original job of checking whether a newer scheduled
+// build has been published, which is what a client reading the link gets.
 const btn = document.getElementById('refresh');
 const btnText = document.getElementById('refresh-text');
 const msgEl = document.getElementById('refresh-msg');
@@ -1592,12 +1711,12 @@ async function refresh() {{
   try {{
     res = await fetch('refresh', {{ method: 'POST' }});
   }} catch (err) {{
-    checkForNewer();
+    published();
     return;
   }}
 
   if (res.status === 404 || res.status === 405 || res.status === 501) {{
-    checkForNewer();
+    published();
     return;
   }}
 
@@ -1632,15 +1751,83 @@ async function checkForNewer() {{
 
   busy(false);
   msg('You are seeing the newest published pull, from <b>' + BUILD_STAMP + '</b>. ' +
-      'The page republishes itself about once an hour, so check back shortly and ' +
-      'press Refresh again to pick up the next pull.<br><br>' +
-      'The published copy cannot reach Meta from your browser: doing so would mean ' +
-      'putting the ad account token into a public page. If a pull is needed sooner, ' +
-      'run the <b>refresh</b> workflow from the repo\\'s Actions tab (works from any ' +
-      'device with repo access), or <code>refresh.command</code> on the Mac.');
+      'The page rebuilds itself on a schedule, and GitHub sometimes runs that schedule ' +
+      'late, so a published build can be a couple of hours old.<br><br>' +
+      'This page ships with no credentials: the repository is public, so a key in the ' +
+      'HTML would be a key on the open internet. For a pull that is never stale, press ' +
+      '<b>Turn on live data</b> and enter your own read-only Meta and Hyros keys. They ' +
+      'stay in this browser, on this device, and Refresh then calls both APIs directly ' +
+      'and repaints the page in seconds.');
+}}
+
+// No serve.py behind this copy. Pull live if this browser holds keys; otherwise check
+// for a newer scheduled build, exactly as before.
+function published() {{
+  if (window.PBILive && window.PBILive.armed()) {{
+    return window.PBILive.refresh({{ busy: busy, msg: msg }});
+  }}
+  return checkForNewer();
 }}
 
 btn.addEventListener('click', refresh);
+
+// ---- live-data controls -------------------------------------------------------
+const liveBtn = document.getElementById('livebtn');
+const keyveil = document.getElementById('keyveil');
+
+function syncLiveBtn() {{
+  if (!liveBtn || !window.PBILive) return;
+  // Only offered where it can work: a file:// copy has no origin Meta will answer, and
+  // serve.py already does the real thing server-side.
+  liveBtn.hidden = location.protocol === 'file:';
+  liveBtn.textContent = window.PBILive.armed() ? 'Live data on' : 'Turn on live data';
+}}
+
+if (liveBtn) {{
+  liveBtn.addEventListener('click', function () {{
+    window.PBILive.openKeyDialog(function () {{ published(); }});
+  }});
+}}
+if (keyveil) {{
+  document.getElementById('key-save').addEventListener('click', function () {{
+    const m = document.getElementById('key-meta').value;
+    const h = document.getElementById('key-hyros').value;
+    if (!m.trim() || !h.trim()) {{
+      msg('Both keys are needed: registrations come from Hyros and spend comes from Meta, '
+          + 'and a missing Hyros key would read as zero registrations rather than as an error.',
+          true);
+      return;
+    }}
+    window.PBILive.saveKeys(m, h);
+    const then = keyveil.__then;
+    window.PBILive.closeKeyDialog();
+    syncLiveBtn();
+    if (then) then();
+  }});
+  document.getElementById('key-cancel').addEventListener('click', function () {{
+    window.PBILive.closeKeyDialog();
+  }});
+  document.getElementById('key-forget').addEventListener('click', function () {{
+    window.PBILive.clearKeys();
+    window.PBILive.closeKeyDialog();
+    syncLiveBtn();
+    msg('Keys cleared from this browser. Refresh now checks for a newer scheduled build '
+        + 'instead of pulling live.');
+  }});
+  keyveil.addEventListener('click', function (e) {{
+    if (e.target === keyveil) window.PBILive.closeKeyDialog();
+  }});
+  document.addEventListener('keydown', function (e) {{
+    if (e.key === 'Escape' && !keyveil.hidden) window.PBILive.closeKeyDialog();
+  }});
+}}
+
+// live.js is injected after this script, so PBILive does not exist yet at parse time.
+if (document.readyState === 'loading') {{
+  window.addEventListener('DOMContentLoaded', syncLiveBtn);
+}} else {{
+  syncLiveBtn();
+}}
 
 // Each creative is stored once and painted into every element that references it.
 for (const img of document.querySelectorAll('img[data-cr]')) {{
@@ -1705,6 +1892,10 @@ document.addEventListener('click', function (e) {{
 }});
 document.getElementById('lb-close').addEventListener('click', closeAd);
 document.addEventListener('keydown', function (e) {{ if (e.key === 'Escape' && !lb.hidden) closeAd(); }});
+</script>
+
+<script>
+{livejs}
 </script>
 </body>
 </html>

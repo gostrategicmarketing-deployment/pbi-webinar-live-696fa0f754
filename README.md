@@ -110,18 +110,80 @@ Format comes from the creative: a `video_id`, or `object_type == VIDEO`, makes i
 preview), then dispatches the deploy repo's `refresh` workflow, which does its own pull +
 build + deploy in the cloud (`build_type=workflow`; see the Schedule section).
 
-The **Refresh button on the page** is real when the page is served by `serve.py`: it POSTs
-`/refresh`, which runs the above, then reloads. On the published copy it cannot be, because
-a static page reaching Meta and Hyros would mean shipping both API keys into a public HTML
-file. There the button re-checks for a newer published build and says where a real refresh
-comes from.
+### The button has three homes
 
-### Schedule (moved to GitHub Actions 2026-08-14)
+| Where | What Refresh does | How current |
+|---|---|---|
+| `serve.py` | POSTs `/refresh`: pull, rebuild, publish, reload | now |
+| Published, **live data on** | calls Meta + Hyros **from the browser** and repaints in place | now |
+| Published, no keys | re-checks whether a newer build has been published | as current as the last build |
+
+The published page ships with no credentials and never will: the repo has to be public for
+Pages, so a key in the HTML is a key on the open internet. The live path solves that by
+asking the *reader* for keys instead. **Turn on live data** takes a read-only Meta token
+and a PBI-scoped Hyros key, keeps them in that browser's `localStorage` on that device
+only, and sends them to nobody but Meta and Hyros. Nothing is written back to the repo, and
+a reader who never enters keys sees exactly the page they saw before.
+
+Phil holds the keys, so Phil gets a pull that is never stale. Erin sees the newest build.
+
+A live pull repaints **today's blended box, the open weekly cycle, and all three windows**:
+totals, campaigns, day by day, every ad, and the featured creative cards, re-ranked. It
+deliberately leaves two things at their build-time values and says so in the status line
+rather than implying they were re-read:
+
+- **Previous weeks** are closed noon-to-noon cycles. They do not move.
+- **The Method notes**, whose reconciliation grades audit that Python pull, not these numbers.
+
+Everything else on the page is the live figure, built the same way `pull.py` builds it.
+
+### live.js
+
+The live layer is `live.js`, injected verbatim into the page by `build.py` at build time
+(so it ships as one self-contained file, like the fonts and the creatives). It is kept as
+its own file rather than inlined in `PAGE` so it stays editable JavaScript instead of a
+brace-doubled string, and so `node --check live.js` can vet it before a build.
+
+**It mirrors `pull.py` and has to keep mirroring it.** Same Graph fields, same
+`campaign.name CONTAIN` filter, same lowercase Hyros parameters (`last_click`,
+`facebook_ad`, `leads,cost,clicks` — this endpoint rejects the camel- and upper-case
+forms), same Hyros-over-pixel rule, same `rank_key`. `pull.py` now carries
+`campaign_match`, `window_start` and `week_tz` in the snapshot's `meta`, and `build.py`
+passes them through as `LIVE_CFG`, so the scope is defined once rather than twice. If you
+change what `pull.py` reads, change this with it or the live numbers and the built numbers
+will quietly disagree.
+
+Two economies the Python does not make, both producing identical results: the daily strip
+and the Hyros per-day reads are pulled once over the widest window and sliced per window,
+rather than three overlapping sweeps.
+
+One rule it does not relax: **a failed Hyros read is not zero registrations.** Hyros
+answering with an error would otherwise repaint the hero as 0 and look like a real
+collapse, so a failed read aborts the whole refresh and leaves every number as it was.
+
+The DOM is patched rather than regenerated: rows and cards are cloned from ones already on
+the page and their cells rewritten, so `build.py` stays the only place this page's markup
+is written.
+
+### Schedule (moved to GitHub Actions 2026-08-14; retimed 2026-08-27)
 
 The deploy repo's own **`refresh` workflow** pulls Meta + Hyros, rebuilds and deploys the
-page hourly (cron minute 8, UTC; GitHub can lag a scheduled run by a few minutes). The Mac
-plays no part: credentials live in the repo's **Actions Secrets** (`FB_TOKEN`,
-`HYROS_API_KEY`, both read-only), reaching the scripts only as env vars during a run.
+page on cron `17,47 * * * *`. The Mac plays no part: credentials live in the repo's
+**Actions Secrets** (`FB_TOKEN`, `HYROS_API_KEY`, both read-only), reaching the scripts
+only as env vars during a run.
+
+**Why twice an hour, and why those minutes.** It was `8 * * * *`, and GitHub kept dropping
+it. Measured over the 200 runs to 2026-08-27: the median gap held at 0.96h, but 6% of gaps
+ran past 1.9h, *every* night showed the same ~2.3h hole around 23:30 UTC, and the night of
+08-26 lost 10.2 hours outright, 23:25Z straight through to 09:34Z. Scheduled runs on public
+repos are best-effort and are shed under load, and load peaks on the first minutes of the
+hour, where nearly every cron is pointed. Moving off the top of the hour and firing twice
+gives two chances to land at two quiet minutes.
+
+This makes the schedule *shorter-tailed*, not reliable. Nothing available here can make a
+GitHub cron reliable. What actually removes staleness is the page's own Refresh button
+pulling live in the browser; the schedule only bounds how old the page is for a reader who
+has no keys.
 
 On-demand from any device: the workflow's **Run workflow** button on the repo's Actions
 tab (or the GitHub mobile app). `refresh.command` on the Mac now does a local pull + build
@@ -166,10 +228,18 @@ stale rather than as wrong.
 Both are read-only. Local runs read the files; cloud runs read the repo's Actions
 Secrets (same values, set 2026-08-14 via `gh secret set`).
 
-| What | Local | Cloud | Notes |
-|---|---|---|---|
-| Meta | `PBI 2/fb_token.txt` or `$FB_TOKEN` | secret `FB_TOKEN` | System user token, does not expire, `ads_read` |
-| Hyros | `PBI 2/hyros_key.txt` or `$HYROS_API_KEY` | secret `HYROS_API_KEY` | PBI-scoped; mode `600` |
+| What | Local | Cloud | In the browser | Notes |
+|---|---|---|---|---|
+| Meta | `PBI 2/fb_token.txt` or `$FB_TOKEN` | secret `FB_TOKEN` | `localStorage.pbi_meta_token` | System user token, does not expire, `ads_read` |
+| Hyros | `PBI 2/hyros_key.txt` or `$HYROS_API_KEY` | secret `HYROS_API_KEY` | `localStorage.pbi_hyros_key` | PBI-scoped; mode `600` |
+
+The browser column is per device and per reader, entered through **Turn on live data** and
+cleared by **Forget these keys** or by clearing site data. Those values are read by
+`live.js` and sent to `graph.facebook.com` and `api.hyros.com` and to nothing else. They
+are never committed, never inlined into the page at build time, and never leave the device
+except as an `access_token` parameter and an `API-Key` header on those two hosts. Both APIs
+allow the browser call directly: Meta returns `access-control-allow-origin: *`, and Hyros
+allow-lists the Pages origin for the `api-key` header.
 
 The Lance key in `Lance Morgan 2/Hyros Lookups/` is scoped to **his** Hyros account and
 returns an empty result for these campaigns. It is not a fallback.
@@ -259,11 +329,13 @@ count for contrast, are printed into the page's Method note.
 ## Files
 
 ```
-refresh.py      pull -> build -> dispatch cloud refresh   (what the button runs)
+refresh.py      pull -> build -> dispatch cloud refresh   (what the button runs locally)
 refresh.command double-clickable wrapper
 serve.py        local server; makes the button real
 pull.py         Meta Graph + Hyros -> data/YYYY-MM-DDTHH_webinar_snapshot.json
-build.py        snapshot -> index.html (fonts + creatives inlined)
+build.py        snapshot -> index.html (fonts + creatives + live.js inlined)
+live.js         the published page's live refresh: pulls Meta + Hyros in the
+                reader's browser and repaints in place. Mirrors pull.py.
 hyros_seed.json MCP-fetched fallback, self-dating
 data/           one snapshot per pull, newest KEEP_SNAPSHOTS (48) retained
 creative-cache/ downscaled ad creatives, keyed on image identity
