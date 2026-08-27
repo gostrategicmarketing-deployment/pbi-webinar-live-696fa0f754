@@ -1,0 +1,21 @@
+name: chaintest
+# Temporary. Answers one question: can a run start the next run using the default
+# GITHUB_TOKEN, or does GitHub's recursion guard block it? Deleted once answered.
+on:
+  workflow_dispatch:
+    inputs:
+      hop:
+        default: "1"
+permissions:
+  actions: write
+jobs:
+  hop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "this is hop ${{ inputs.hop }}"
+      - if: inputs.hop == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run chaintest.yml -R ${{ github.repository }} -f hop=2
+          echo "dispatched hop=2 with GITHUB_TOKEN"
