@@ -177,13 +177,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # Three things can trigger this workflow and they converge. Whoever is already
-          # queued will carry the chain on, and since GitHub keeps only the newest
-          # pending run per concurrency group, dispatching over the top of one would
-          # cancel it and gain nothing.
-          QUEUED=$(gh run list -R "$GITHUB_REPOSITORY" --workflow refresh.yml \
-                     --status queued --json databaseId --jq 'length' || echo 0)
-          if [ "${QUEUED:-0}" -gt 0 ]; then
-            echo "::notice::${QUEUED} run already queued; it carries the chain."
+          # waiting will carry the chain on, and GitHub keeps only the newest *pending*
+          # run per concurrency group, so dispatching over the top of one does not queue
+          # behind it: it cancels it.
+          #
+          # Count every run that has not completed, not just `queued` ones. A run held
+          # back by a concurrency group reports status **pending**, not queued, and the
+          # first version of this checked only for queued. On 2026-08-27 15:54Z that let
+          # this step dispatch straight over a pending push run and cancel it. Nothing
+          # was lost, because the run it dispatched built the same commit, but a push
+          # that reports "cancelled" is alarming and wrong.
+          OTHERS=$(gh run list -R "$GITHUB_REPOSITORY" --workflow refresh.yml --limit 20 \
+                     --json databaseId,status \
+                     --jq "[.[] | select(.status != \"completed\" and .databaseId != ${{ github.run_id }})] | length" \
+                   || echo 0)
+          if [ "${OTHERS:-0}" -gt 0 ]; then
+            echo "::notice::${OTHERS} run already waiting; it carries the chain."
             exit 0
           fi
 
@@ -192,11 +201,11 @@ jobs:
 
           # A chain that dies quietly is the one failure that puts the page back where it
           # started, so it is checked rather than assumed.
-          LIVE=$(gh run list -R "$GITHUB_REPOSITORY" --workflow refresh.yml \
-                   --status queued --json databaseId --jq 'length' || echo 0)
-          BUSY=$(gh run list -R "$GITHUB_REPOSITORY" --workflow refresh.yml \
-                   --status in_progress --json databaseId --jq 'length' || echo 0)
-          if [ "$((LIVE + BUSY))" -gt 0 ]; then
+          NEXT=$(gh run list -R "$GITHUB_REPOSITORY" --workflow refresh.yml --limit 20 \
+                   --json databaseId,status \
+                   --jq "[.[] | select(.status != \"completed\" and .databaseId != ${{ github.run_id }})] | length" \
+                 || echo 0)
+          if [ "${NEXT:-0}" -gt 0 ]; then
             echo "::notice::next link is live; the page refreshes again in ~2 minutes."
           else
             echo "::error::Dispatched the next link and nothing appeared. The chain is"
