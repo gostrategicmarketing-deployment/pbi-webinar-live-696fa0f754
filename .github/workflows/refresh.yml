@@ -1,11 +1,12 @@
 name: refresh
 
-# Pull Meta + Hyros, rebuild the dashboard, deploy it to GitHub Pages, then start the
-# next run thirty minutes on.
+# Pull Meta, rebuild the dashboard, deploy it to GitHub Pages, then start the next run
+# thirty minutes on.
 #
-# The two API credentials live only in Actions Secrets (FB_TOKEN, HYROS_API_KEY); they
-# reach the scripts as environment variables and never touch the repo or the published
-# page. Both are read-only keys.
+# The API credential lives only in Actions Secrets (FB_TOKEN); it reaches the scripts as
+# an environment variable and never touches the repo or the published page. It is a
+# read-only key. HYROS_API_KEY is no longer read by anything as of 2026-09-07 and is left
+# in Secrets only so nothing has to be re-issued if it is ever wanted again.
 
 on:
   # THE SCHEDULE IS THE CHAIN AT THE FOOT OF THIS JOB, NOT THIS CRON.
@@ -39,9 +40,7 @@ on:
     paths:
       - pull.py
       - live.js
-      - live.html
       - build.py
-      - hyros_seed.json
       - fonts/**
       - brand/**
       - robots.txt
@@ -92,17 +91,20 @@ jobs:
           restore-keys: |
             creative-cache-
 
-      - name: Pull Meta + Hyros
+      - name: Pull Meta
         env:
           FB_TOKEN: ${{ secrets.FB_TOKEN }}
-          HYROS_API_KEY: ${{ secrets.HYROS_API_KEY }}
         run: python pull.py
 
       - name: Build the page
         run: python build.py
 
+      # live.html was a standalone prototype from before the live refresh moved into the
+      # dashboard itself. It was never linked from index.html, it duplicates what the main
+      # page now does, and it still stated registrations the old Hyros way, so it stopped
+      # being published on 2026-09-07 rather than left contradicting the dashboard.
       - name: Assemble the site
-        run: mkdir -p _site && cp index.html robots.txt live.html _site/
+        run: mkdir -p _site && cp index.html robots.txt _site/
 
       - uses: actions/upload-pages-artifact@v3
         with:

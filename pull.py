@@ -33,8 +33,6 @@ from zoneinfo import ZoneInfo
 
 HERE = Path(__file__).resolve().parent
 TOKEN_FILE = Path("/Users/philglutting/Documents/Claude/Projects/PBI 2/fb_token.txt")
-HYROS_KEY_FILE = Path("/Users/philglutting/Documents/Claude/Projects/PBI 2/hyros_key.txt")
-HYROS_API = "https://api.hyros.com/v1/api/v1.0"
 ACCOUNT = "act_37394393"
 ACCOUNT_LABEL = "Joy of Marketing"
 API = "https://graph.facebook.com/v21.0"
@@ -51,10 +49,47 @@ WINDOW_START = "2026-08-11"
 
 CAMPAIGN_MATCH = "webinar"
 
-# The Lead standard pixel event. In this account `lead`, `offsite_conversion.fb_pixel_lead`
-# and `onsite_web_lead` all return the same count, so the pixel event is read directly
-# rather than through the aggregated `lead` column.
-LEAD_ACTION = "offsite_conversion.fb_pixel_lead"
+# A webinar registration reaches PBI down one of two paths, and Meta reports them as two
+# different actions. Both are counted, and both are carried separately so the page can
+# show its own arithmetic:
+#
+#   lead form   on-Meta instant form. The person never leaves Facebook, so no pixel and no
+#               funnel page view is involved. This is the exact count Meta itself reports
+#               as "Lead (form)" and it is the figure PBI treats as ground truth.
+#   page opt-in the ad sends the person to the GoHighLevel funnel and they fill in the
+#               "Opt in v2" step. Meta learns about it from the pixel.
+#
+# Reading only the pixel event, as this file did until 2026-09-07, scored every lead-form
+# ad as zero: the lead-form campaigns emit `onsite_conversion.lead_grouped` and never
+# `offsite_conversion.fb_pixel_lead`. That silently erased what is now the larger half of
+# the program (196 of 358 registrations over 2026-08-28..09-06).
+LEAD_FORM_ACTION = "onsite_conversion.lead_grouped"
+PAGE_OPTIN_ACTION = "offsite_conversion.fb_pixel_lead"
+
+# The pixel on the funnel page was repaired on 2026-08-27 (see ../2026-08-27 - Pixel
+# Events/). Before that it fired on a fraction of opt-ins, so the page-opt-in half of
+# every earlier cycle is understated. Measured against the funnel's own counter:
+#
+#   date          GHL "Opt in v2"   Meta pixel   captured
+#   2026-08-20               57           15        26%
+#   2026-08-28..09-06       245          162        66%
+#   2026-09-01..09-06       111          100        90%
+#   2026-09-06                9            9       100%
+#
+# So cycles that closed before the repair are restated on the funnel's own count, taken
+# from the GoHighLevel funnel stats page (GHL_STATS_URL below) over the cycle's whole-day
+# span. Cycles after it are left on Meta, which now agrees with the funnel to within
+# about a tenth. Verify with GHL_STATS_URL: "Opt in v2" opt-ins plus Meta's Lead (form)
+# is the registration figure this page reports.
+PIXEL_FIX_DATE = date(2026, 8, 27)
+GHL_STATS_URL = ("https://app.pbiflightcrew.com/v2/location/GmBTEcbq9PN9YY99gncv"
+                 "/funnels-websites/funnels/jlPVWxKKFvE67r7hNCb0/stats")
+GHL_OPTINS = {
+    # (first day, last day) inclusive, ad-account clock -> "Opt in v2" opt-ins
+    ("2026-08-10", "2026-08-16"): 316,
+    ("2026-08-17", "2026-08-23"): 359,
+    ("2026-08-24", "2026-08-30"): 269,
+}
 
 # Hourly runs would otherwise fill data/ with 24 files a day. Two days of history is
 # enough to diff a bad pull against a good one; Meta remains the source of truth.
@@ -221,6 +256,16 @@ def acts(row, key="actions"):
     return {a["action_type"]: float(a["value"]) for a in row.get(key, []) or []}
 
 
+def reg_parts(row):
+    """(lead-form, page-opt-in) registrations for one insights row."""
+    return reg_split(acts(row))
+
+
+def reg_split(a):
+    """The same, for an actions dict that has already been built."""
+    return int(a.get(LEAD_FORM_ACTION, 0)), int(a.get(PAGE_OPTIN_ACTION, 0))
+
+
 def num(row, field):
     v = row.get(field)
     return float(v) if v not in (None, "") else 0.0
@@ -259,23 +304,27 @@ def daily(since, until):
         "time_increment": 1,
         "limit": 500,
     })
-    return [{
-        "date": r["date_start"],
-        "spend": round(num(r, "spend"), 2),
-        "link_clicks": int(num(r, "inline_link_clicks")),
-        "leads": int(acts(r).get(LEAD_ACTION, 0)),
-    } for r in rows]
+    out = []
+    for r in rows:
+        form, page = reg_parts(r)
+        out.append({
+            "date": r["date_start"],
+            "spend": round(num(r, "spend"), 2),
+            "link_clicks": int(num(r, "inline_link_clicks")),
+            "lead_form": form,
+            "page_optin": page,
+            "leads": form + page,
+        })
+    return out
 
 
 def daily_merged(since, until, campaign_ids):
-    """Meta spend and link clicks per day, with Hyros registrations on the same days."""
-    rows = daily(since, until)
-    hy = hyros_daily(campaign_ids, since, until)
-    for r in rows:
-        r["meta_pixel_leads"] = r["leads"]
-        r["leads"] = hy.get(r["date"], 0) if hy else 0
-        r["hyros"] = bool(hy)
-    return rows
+    """Spend, link clicks and both registration components per day, all from Meta.
+
+    One source per day means the day strip adds up to the window totals above it, which
+    it could not do while the days and the totals came from two different systems.
+    """
+    return daily(since, until)
 
 
 def creatives(ad_ids):
@@ -324,11 +373,18 @@ def creatives(ad_ids):
     return out
 
 
-def metrics(spend, leads, link_clicks):
-    """The five reported figures, and only those. Costs are None when undefined."""
+def metrics(spend, link_clicks, lead_form, page_optin):
+    """The five reported figures, and only those. Costs are None when undefined.
+
+    Registrations always arrive as their two components so that every box on the page
+    can show the arithmetic the client is asked to verify: lead form plus page opt-in.
+    """
+    leads = lead_form + page_optin
     return {
         "spend": round(spend, 2),
         "leads": leads,
+        "lead_form": lead_form,
+        "page_optin": page_optin,
         "link_clicks": link_clicks,
         "cost_per_lead": round(spend / leads, 2) if leads else None,
         "cost_per_link_click": round(spend / link_clicks, 2) if link_clicks else None,
@@ -338,9 +394,8 @@ def metrics(spend, leads, link_clicks):
 def shape_ads(rows):
     ads = []
     for r in rows:
-        a = acts(r)
-        m = metrics(num(r, "spend"), int(a.get(LEAD_ACTION, 0)),
-                    int(num(r, "inline_link_clicks")))
+        form, page = reg_parts(r)
+        m = metrics(num(r, "spend"), int(num(r, "inline_link_clicks")), form, page)
         ads.append({
             "ad_id": r["ad_id"],
             "ad_name": r["ad_name"],
@@ -355,52 +410,35 @@ def shape_ads(rows):
 def totals(ads):
     """Rates are recomputed from the summed components, never averaged across ads."""
     t = metrics(sum(a["spend"] for a in ads),
-                sum(a["leads"] for a in ads),
-                sum(a["link_clicks"] for a in ads))
+                sum(a["link_clicks"] for a in ads),
+                sum(a["lead_form"] for a in ads),
+                sum(a["page_optin"] for a in ads))
     t["impressions"] = sum(a["impressions"] for a in ads)
     return t
 
 
 def pull_window(since, until, label, note, campaign_ids):
-    """One window. Spend and link clicks are Meta's; registrations are Hyros's.
+    """One window, entirely from Meta: spend, link clicks and both registration halves.
 
-    The whole page reports one registration number so nothing contradicts the hero, and
-    Hyros is that number: it credits registrations the Meta pixel never sees. Over
-    2026-08-11..13 Hyros counted 155 at ad level against the pixel's 52, and it reorders
-    the board rather than just scaling it, so the ranking has to be built on it.
-
-    Meta's own pixel count is kept per ad as meta_pixel_leads, for reference only.
+    Registrations are the lead-form count plus the page-opt-in count, per ad, so every
+    figure on the page traces back to something the client can look up themselves: the
+    lead-form half against Meta's own "Lead (form)" column, the page-opt-in half against
+    the funnel's "Opt in v2" row. Nothing here is modelled or blended.
     """
     print(f"  [{label}] {since} -> {until}")
 
     ad_rows = insights("ad", since, until, ",adset_name,ad_id,ad_name")
     ads = shape_ads(ad_rows)
 
-    hy_ads = hyros_by_id("facebook_ad", [a["ad_id"] for a in ads], since, until)
-    matched = 0
-    for a in ads:
-        h = hy_ads.get(a["ad_id"])
-        a["meta_pixel_leads"] = a["leads"]
-        a["leads"] = h["leads"] if h else 0
-        a["hyros_row"] = h is not None
-        matched += 1 if h else 0
-        # Cost per registration pairs Meta's spend with Hyros's registrations, exactly as
-        # the hero does, so an ad's figure and the day's figure are built the same way.
-        a["cost_per_lead"] = round(a["spend"] / a["leads"], 2) if a["leads"] else None
-    print(f"        hyros ad rows matched {matched}/{len(ads)}")
-
     camp_rows = insights("campaign", since, until)
     win_ids = [str(r["campaign_id"]) for r in camp_rows] or campaign_ids
-    hy_camps = hyros_by_id("facebook_campaign", win_ids, since, until)
     campaigns = []
     for r in camp_rows:
-        cid = str(r["campaign_id"])
-        spend = num(r, "spend")
-        leads = hy_camps.get(cid, {}).get("leads", 0)
+        form, page = reg_parts(r)
         campaigns.append({
-            "campaign_id": cid,
+            "campaign_id": str(r["campaign_id"]),
             "campaign_name": r["campaign_name"],
-            **metrics(spend, leads, int(num(r, "inline_link_clicks"))),
+            **metrics(num(r, "spend"), int(num(r, "inline_link_clicks")), form, page),
         })
     campaigns.sort(key=lambda c: -c["spend"])
 
@@ -411,26 +449,29 @@ def pull_window(since, until, label, note, campaign_ids):
     t = totals(ads)
     if acct_rows:
         acct = acct_rows[0]
-        a_acts = acts(acct)
+        a_form, a_page = reg_parts(acct)
         account = {
             "spend": round(num(acct, "spend"), 2),
             "link_clicks": int(num(acct, "inline_link_clicks")),
-            "leads": int(a_acts.get(LEAD_ACTION, 0)),
+            "leads": a_form + a_page,
+            "lead_form": a_form,
+            "page_optin": a_page,
         }
     else:
-        account = {"spend": 0.0, "link_clicks": 0, "leads": 0}
+        account = {"spend": 0.0, "link_clicks": 0, "leads": 0,
+                   "lead_form": 0, "page_optin": 0}
 
     # Graded per metric rather than a single pass/fail. Summing ad rows never quite
     # equals the account figure: an ad deleted mid-window still counts at account level
     # but returns no ad row, so a strict equality check would fire permanently and train
-    # everyone to ignore it. Only the two Meta-sourced figures are checked against Meta;
-    # registrations are Hyros's and are reconciled separately below.
+    # everyone to ignore it. Registrations are now checked here too, because they come
+    # from the same Meta read as the spend rather than from a second system.
     recon = {
         "account": account,
-        "ad_sum": {k: t[k] for k in ("spend", "link_clicks")},
+        "ad_sum": {k: t[k] for k in ("spend", "link_clicks", "leads", "lead_form", "page_optin")},
         "deltas": {},
     }
-    for k in ("spend", "link_clicks"):
+    for k in ("spend", "link_clicks", "leads", "lead_form", "page_optin"):
         a_val, s_val = account[k], recon["ad_sum"][k]
         pct = round(abs(s_val - a_val) / a_val * 100, 3) if a_val else 0.0
         recon["deltas"][k] = {
@@ -442,20 +483,22 @@ def pull_window(since, until, label, note, campaign_ids):
                             else "drift" if any(d["grade"] == "drift" for d in recon["deltas"].values())
                             else "exact")
 
-    # Hyros's own cross-check: ad rows summed against the campaign-level answer for the
-    # same window. They ran 155 against 153 on 2026-08-13, a 1.3% gap.
+    # Second cross-check: ad rows summed against the campaign-level answer for the same
+    # window. Both come from Meta, so these should agree exactly unless an ad was deleted
+    # mid-window.
     camp_leads = sum(c["leads"] for c in campaigns)
-    ad_leads = t["leads"]
-    recon["hyros"] = {
-        "ad_sum": ad_leads,
+    recon["registrations"] = {
+        "ad_sum": t["leads"],
         "campaign_sum": camp_leads,
-        "pct": round(abs(ad_leads - camp_leads) / camp_leads * 100, 2) if camp_leads else 0.0,
-        "meta_pixel": sum(a["meta_pixel_leads"] for a in ads),
+        "pct": round(abs(t["leads"] - camp_leads) / camp_leads * 100, 2) if camp_leads else 0.0,
+        "lead_form": t["lead_form"],
+        "page_optin": t["page_optin"],
     }
 
     flags = " ".join(f"{k}:{d['grade']}" for k, d in recon["deltas"].items() if d["grade"] != "exact")
-    print(f"        {len(ads)} ads | spend ${t['spend']:,.2f} | hyros regs {t['leads']} "
-          f"(campaign-level {camp_leads}, meta pixel {recon['hyros']['meta_pixel']}) | "
+    print(f"        {len(ads)} ads | spend ${t['spend']:,.2f} | regs {t['leads']} "
+          f"(lead form {t['lead_form']}, page opt-in {t['page_optin']}; "
+          f"campaign-level {camp_leads}) | "
           f"link clicks {t['link_clicks']} | recon {recon['worst_grade']}"
           + (f" ({flags})" if flags else ""))
 
@@ -464,6 +507,12 @@ def pull_window(since, until, label, note, campaign_ids):
         "note": note,
         "since": since,
         "until": until,
+        # A window reaching back before the pixel repair carries a page-opt-in half that
+        # Meta undercounts, and it cannot be restated the way the weekly cycles are:
+        # the funnel's stats have no per-ad breakdown, so there is nothing to correct an
+        # individual creative against. The page says so rather than quietly rescaling.
+        "page_optin_understated": date.fromisoformat(since) <= PIXEL_FIX_DATE,
+        "pixel_fix_date": PIXEL_FIX_DATE.isoformat(),
         "days": (date.fromisoformat(until) - date.fromisoformat(since)).days + 1,
         "totals": t,
         "reconciliation": recon,
@@ -471,81 +520,6 @@ def pull_window(since, until, label, note, campaign_ids):
         "daily": daily_merged(since, until, win_ids),
         "ads": ads,
     }
-
-
-def hyros_key():
-    key = os.environ.get("HYROS_API_KEY", "").strip()
-    if not key and HYROS_KEY_FILE.exists():
-        key = HYROS_KEY_FILE.read_text().strip()
-    return key
-
-
-def hyros_call(level, ids, since, until):
-    """One /attribution read. Returns [] on any failure so callers degrade rather than die."""
-    key = hyros_key()
-    if not key or not ids:
-        return []
-    params = urllib.parse.urlencode({
-        "startDate": since, "endDate": until,
-        "attributionModel": "last_click",     # not lastClick, not LAST_CLICK
-        "level": level,                       # facebook_ad / facebook_campaign
-        "fields": "leads,cost,clicks",        # lowercase only
-        "ids": ",".join(ids),
-    })
-    # An empty return here is not neutral: it reads downstream as *zero registrations*,
-    # which would quietly understate the hero rather than showing an error. So a
-    # transient Hyros failure is retried before being allowed to degrade, and the reason
-    # is printed so a run of silent zeroes is traceable in the log.
-    reason = "no attempt made"
-    for attempt in range(3):
-        out = subprocess.run(
-            ["curl", "-sS", "--max-time", "60", "-w", "\n%{http_code}",
-             "-H", f"API-Key: {key}", f"{HYROS_API}/attribution?{params}"],
-            capture_output=True, text=True)
-        if out.returncode != 0:
-            reason = (out.stderr or "").strip()[:120] or f"curl exit {out.returncode}"
-        else:
-            body, _, tail = out.stdout.rpartition("\n")
-            status = tail.strip()
-            if status == "200":
-                try:
-                    return json.loads(body).get("result", []) or []
-                except json.JSONDecodeError:
-                    reason = f"unparseable body: {body[:120]}"
-            else:
-                reason = f"HTTP {status}: {body[:120]}"
-        if attempt < 2:
-            sleep(2 * 2 ** attempt)
-    print(f"    hyros {level} read failed, treating as no rows: {reason}", flush=True)
-    return []
-
-
-def hyros_by_id(level, ids, since, until, batch=20):
-    """Hyros wants real IDs and rejects `ids=ALL`, so ad reads go in batches."""
-    out = {}
-    for i in range(0, len(ids), batch):
-        for r in hyros_call(level, ids[i:i + batch], since, until):
-            out[str(r.get("id"))] = {
-                "leads": int(r.get("leads") or 0),
-                "cost": round(float(r.get("cost") or 0), 2),
-                "clicks": int(r.get("clicks") or 0),
-            }
-    return out
-
-
-def hyros_daily(campaign_ids, since, until, cap=31):
-    """Registrations per day. Hyros has no day grouping on this endpoint, so it is one
-    read per day; capped so a long window cannot fan out into hundreds of calls."""
-    d0, d1 = date.fromisoformat(since), date.fromisoformat(until)
-    days = (d1 - d0).days + 1
-    if days > cap:
-        return {}
-    out = {}
-    for i in range(days):
-        day = (d0 + timedelta(days=i)).isoformat()
-        rows = hyros_call("facebook_campaign", campaign_ids, day, day)
-        out[day] = sum(int(r.get("leads") or 0) for r in rows)
-    return out
 
 
 # PBI counts a webinar week from noon Central to noon Central on the following Monday:
@@ -568,17 +542,19 @@ def week_bounds(now):
 
 
 def meta_instant_range(opened, closed):
-    """Meta spend and link clicks between two instants, from the hourly breakdown.
+    """Spend, link clicks and both registration halves between two instants.
 
     Day-level insights cannot answer a noon boundary, so this reads the 24 hourly buckets
     per day and keeps the ones inside the window. The buckets are labelled in the ad
-    account's own timezone, which is what `date_start` is keyed to as well.
+    account's own timezone, which is what `date_start` is keyed to as well. Meta returns
+    `actions` per bucket and they sum to the day figure exactly, so registrations land on
+    the noon boundary as precisely as spend does.
     """
     o = opened.astimezone(ACCOUNT_TZ)
     c = closed.astimezone(ACCOUNT_TZ)
     rows = get_all(f"{ACCOUNT}/insights", {
         "level": "account",
-        "fields": "spend,inline_link_clicks",
+        "fields": "spend,inline_link_clicks,actions",
         "breakdowns": "hourly_stats_aggregated_by_advertiser_time_zone",
         "filtering": json.dumps(
             [{"field": "campaign.name", "operator": "CONTAIN", "value": CAMPAIGN_MATCH}]),
@@ -589,6 +565,8 @@ def meta_instant_range(opened, closed):
     spend = 0.0
     clicks = 0
     hours = 0
+    form = 0
+    page = 0
     for r in rows:
         bucket = r.get("hourly_stats_aggregated_by_advertiser_time_zone", "")
         try:
@@ -599,29 +577,59 @@ def meta_instant_range(opened, closed):
         if o <= stamp < c:
             spend += num(r, "spend")
             clicks += int(num(r, "inline_link_clicks"))
+            f, p = reg_parts(r)
+            form += f
+            page += p
             hours += 1
-    return round(spend, 2), clicks, hours
+    return round(spend, 2), clicks, hours, form, page
+
+
+def ghl_restatement(opened, closed):
+    """The funnel's own opt-in count for a cycle that predates the 2026-08-27 pixel fix.
+
+    Returns (opt-ins, whole-day span) or (None, None). The cycle runs noon Monday to noon
+    Monday but the funnel's stats page only slices whole days, so the count is taken over
+    the seven days the cycle opens on. That approximation is worth far less error than
+    the thing it corrects: the pixel was capturing about a quarter of opt-ins.
+
+    Keyed on the day the cycle OPENED, not the day it closed. The cycle that opened
+    2026-08-24 was still running when the pixel was repaired on the 27th, so three of its
+    seven days are undercounted by Meta and the funnel's own count is the better figure
+    for the whole cycle. Only a cycle that opens after the repair is left on Meta.
+    """
+    first = opened.astimezone(ACCOUNT_TZ).date()
+    if first > PIXEL_FIX_DATE:
+        return None, None
+    span = (first.isoformat(), (first + timedelta(days=6)).isoformat())
+    return GHL_OPTINS.get(span), span
 
 
 def week_cycle(campaign_ids, opened, closed, now, label):
     """One noon-Monday-to-noon-Monday cycle, on the same five metrics as every other box."""
-    # Never ask either API past now: Hyros returns an empty result for a future endDate
-    # rather than the data so far, which would read as zero on live spend.
+    # Never ask Meta past now: an hour bucket that has not happened yet returns nothing,
+    # and counting it as elapsed would understate the cycle's rates on live spend.
     api_close = min(closed, now)
     closing_now = closed > now
 
-    spend, clicks, hours = meta_instant_range(opened, api_close)
+    spend, clicks, hours, form, page = meta_instant_range(opened, api_close)
 
-    ids = campaign_ids
-    day_ids = delivering_campaign_ids(opened.astimezone(ACCOUNT_TZ).date().isoformat(),
-                                      api_close.astimezone(ACCOUNT_TZ).date().isoformat())
-    if day_ids:
-        ids = day_ids
-    hy = hyros_range(ids, opened.isoformat(timespec="seconds"),
-                     api_close.isoformat(timespec="seconds"))
-    leads = hy["leads"] if hy else 0
+    # Cycles that closed before the pixel repair are restated on the funnel's own opt-in
+    # count, because Meta's page-opt-in half is known to be short for those weeks.
+    restated, span = ghl_restatement(opened, closed)
+    if restated is not None:
+        page_source = "GoHighLevel funnel, Opt in v2"
+        page = restated
+    else:
+        page_source = "Meta pixel"
+    leads = form + page
 
     return {
+        "lead_form": form,
+        "page_optin": page,
+        "page_optin_source": page_source,
+        "page_optin_restated": restated is not None,
+        "page_optin_span": list(span) if span else None,
+        "pixel_fix_date": PIXEL_FIX_DATE.isoformat(),
         "label": label,
         "opened": opened.isoformat(timespec="minutes"),
         "closed": closed.isoformat(timespec="minutes"),
@@ -665,80 +673,12 @@ def previous_weeks(campaign_ids, opened, now):
 def delivering_campaign_ids(since, until):
     """Every webinar campaign that actually delivered in this range, per Meta.
 
-    Hyros has to be asked about exactly the campaigns whose spend Meta is reporting.
     Selecting by ACTIVE status instead silently drops a campaign that has since been
     paused while its spend still lands in the totals: on 2026-08-16 that was
     `TOF | Weekly Webinar Lead Ads`, contributing $890.79 of spend and zero
     registrations, which inflated cost per registration across every box.
     """
     return [str(r["campaign_id"]) for r in insights("campaign", since, until)]
-
-
-def hyros_range(campaign_ids, since, until):
-    """Hyros registrations, cost and clicks for a date range.
-
-    Hyros returns an empty result for any endDate in the future rather than the data so
-    far, so a Monday-to-Monday window whose closing Monday has not arrived would read as
-    zero registrations on live spend. Callers clamp `until` to today; this guards it too.
-    """
-    if not hyros_key():
-        return None
-    rows = hyros_call("facebook_campaign", campaign_ids, since, until)
-    rows = [r for r in rows if isinstance(r, dict)]
-    if not rows:
-        return None
-    leads = sum(int(r.get("leads") or 0) for r in rows)
-    cost = round(sum(float(r.get("cost") or 0) for r in rows), 2)
-    clicks = sum(int(r.get("clicks") or 0) for r in rows)
-    return {"leads": leads, "cost": cost, "clicks": clicks}
-
-
-def hyros_today(campaign_ids, day):
-    """Today's blended webinar registrations, from Hyros rather than the Meta pixel.
-
-    Hyros credits registrations the Meta pixel never sees: on 2026-08-13 it counted 53
-    against the pixel's 22 on the same spend. Its click figure matched Meta's link
-    clicks exactly, which is what makes the two safe to put in one box.
-
-    Needs a PBI-scoped Hyros API key. The Lance key in the workspace is scoped to his
-    account and returns an empty result for these campaigns, so it is not a fallback.
-    Returns None when no key is configured; the caller degrades rather than failing.
-    """
-    if not hyros_key():
-        return None
-    rows = hyros_call("facebook_campaign", campaign_ids, day, day)
-    if not rows:
-        print("  hyros: key returned no rows for these campaigns (wrong account?)")
-        return None
-
-    leads = sum(int(r.get("leads") or 0) for r in rows)
-    cost = round(sum(float(r.get("cost") or 0) for r in rows), 2)
-    clicks = sum(int(r.get("clicks") or 0) for r in rows)
-    return {
-        "date": day,
-        "leads": leads,
-        "cost": cost,
-        "clicks": clicks,
-        "cost_per_lead": round(cost / leads, 2) if leads else None,
-        "cost_per_click": round(cost / clicks, 2) if clicks else None,
-        "conv_rate": round(leads / clicks * 100, 2) if clicks else None,
-        "source": "Hyros REST /attribution, last click",
-        "fetched_at": datetime.now(ACCOUNT_TZ).isoformat(timespec="seconds"),
-    }
-
-
-def hyros_seed(day):
-    """Fallback for a run with no API key: the last figures fetched through the Hyros
-    MCP, carrying their own date so the page can grey them out once they go stale."""
-    seed_file = HERE / "hyros_seed.json"
-    if not seed_file.exists():
-        return None
-    try:
-        seed = json.loads(seed_file.read_text())
-    except json.JSONDecodeError:
-        return None
-    seed["stale"] = seed.get("date") != day
-    return seed
 
 
 def prune(data_dir):
@@ -761,8 +701,8 @@ def main():
     live = [c for c in camps if c["effective_status"] == "ACTIVE"]
     print(f"  {len(camps)} campaigns match '{CAMPAIGN_MATCH}' ({len(live)} active)")
 
-    # Hyros is asked about the campaigns that actually run this funnel, not all 219
-    # name-matched ones: the archived ones stopped in 2024 and only cost round trips.
+    # Only the campaigns that actually run this funnel, not all 219 name-matched ones:
+    # the archived ones stopped in 2024 and only cost round trips.
     live_ids = [c["id"] for c in live] or [c["id"] for c in camps[:2]]
 
     if len(sys.argv) >= 3:
@@ -805,37 +745,33 @@ def main():
     n_video = sum(1 for v in cr.values() if v["format"] == "VIDEO")
     print(f"  {len(cr)} creatives resolved ({n_video} video, {len(cr) - n_video} image)")
 
-    # Today's box. Spend and link clicks come from Meta's own daily row for today so
-    # they agree with the day strip below; registrations come from Hyros, which is the
-    # whole point of calling them blended.
+    # Today's box, entirely from Meta's own daily row, so it agrees with the day strip
+    # below rather than contradicting it. Both registration halves are carried through:
+    # the lead-form count is what Meta reports as "Lead (form)", and the page opt-in is
+    # what the GoHighLevel funnel records on its "Opt in v2" step.
     today_iso = today.isoformat()
     day_row = next((d for d in windows[default_window]["daily"] if d["date"] == today_iso), None)
-    today_ids = delivering_campaign_ids(today_iso, today_iso) or live_ids
-    hy = hyros_today(today_ids, today_iso) if today_ids else None
-    if hy is None:
-        hy = hyros_seed(today_iso)
-        if hy:
-            print(f"  hyros: using seeded figures from {hy.get('date')}"
-                  + (" (STALE)" if hy.get("stale") else ""))
-    else:
-        print(f"  hyros: {hy['leads']} registrations, ${hy['cost']:,.2f}, {hy['clicks']} clicks")
 
     spend = day_row["spend"] if day_row else 0.0
     clicks = day_row["link_clicks"] if day_row else 0
+    form = day_row["lead_form"] if day_row else 0
+    page = day_row["page_optin"] if day_row else 0
+    leads = form + page
+    print(f"  today: {leads} registrations (lead form {form}, page opt-in {page}), "
+          f"${spend:,.2f}, {clicks} link clicks")
     todays = {
         "date": today_iso,
         "spend": spend,
         "link_clicks": clicks,
         "cost_per_link_click": round(spend / clicks, 2) if clicks else None,
-        "meta_pixel_leads": day_row["leads"] if day_row else 0,
-        "hyros": hy,
+        "leads": leads,
+        "lead_form": form,
+        "page_optin": page,
+        "cost_per_lead": round(spend / leads, 2) if leads else None,
+        "conv_rate": round(leads / clicks * 100, 2) if clicks else None,
+        "source": "Meta Graph API: Lead (form) plus pixel opt-ins on the funnel page",
+        "fetched_at": datetime.now(ACCOUNT_TZ).isoformat(timespec="seconds"),
     }
-    if hy and hy.get("leads"):
-        todays["cost_per_lead"] = round(spend / hy["leads"], 2)
-        todays["conv_rate"] = round(hy["leads"] / clicks * 100, 2) if clicks else None
-    else:
-        todays["cost_per_lead"] = None
-        todays["conv_rate"] = None
 
     opened, closed = week_bounds(now)
     wk = week_cycle(live_ids, opened, closed, now, "This week") if live_ids else None
@@ -867,7 +803,11 @@ def main():
             "campaign_match": CAMPAIGN_MATCH,
             "window_start": WINDOW_START,
             "week_tz": str(WEEK_TZ),
-            "lead_action": LEAD_ACTION,
+            "lead_form_action": LEAD_FORM_ACTION,
+            "page_optin_action": PAGE_OPTIN_ACTION,
+            "pixel_fix_date": PIXEL_FIX_DATE.isoformat(),
+            "ghl_stats_url": GHL_STATS_URL,
+            "ghl_optins": {f"{a}..{b}": v for (a, b), v in GHL_OPTINS.items()},
             "source": "Meta Graph API v21.0 (ads_read)",
             "pulled_at": now.isoformat(timespec="seconds"),
             "pulled_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),

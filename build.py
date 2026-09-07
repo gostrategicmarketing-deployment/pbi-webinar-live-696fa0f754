@@ -286,13 +286,13 @@ def recon_line(r):
                      "ad deleted mid-window still counts at account level while returning no "
                      "ad row." + tail)
 
-    h = r.get("hyros")
+    h = r.get("registrations")
     if not h:
         return meta_part
-    return (meta_part + f" Registrations are checked the same way inside Hyros: the ad rows sum "
-            f"to {n(h['ad_sum'])} against {n(h['campaign_sum'])} at campaign level for the same "
-            f"window, a {h['pct']}% gap. Meta's own Lead pixel counted {n(h['meta_pixel'])} over "
-            f"the same period, which is the undercount this report exists to correct.")
+    return (meta_part + f" Registrations are checked the same way: the ad rows sum to "
+            f"{n(h['ad_sum'])} against {n(h['campaign_sum'])} at campaign level for the same "
+            f"window, a {h['pct']}% gap. Of those, {n(h['lead_form'])} are on-Meta lead forms "
+            f"and {n(h['page_optin'])} are opt-ins on the funnel page.")
 
 
 def bar_path(x, y, w, h, r=4):
@@ -417,51 +417,49 @@ def summary_box(flag, title, blurb, cells, note, extra_class="", box_id=""):
 
 
 def blended_cells(leads, cost_per_lead, link_clicks, cost_per_click, spend, conv,
-                  spend_def, have):
-    """The six figures, in the order they are argued. Identical for every window."""
+                  spend_def, have, lead_form=None, page_optin=None):
+    """The six figures, in the order they are argued. Identical for every window.
+
+    The registration cell carries its own arithmetic underneath: the two halves are what
+    the client can look up, so they are printed rather than described.
+    """
+    if lead_form is None:
+        sub = "Lead forms plus funnel opt-ins"
+    else:
+        sub = f"{n(lead_form)} lead form + {n(page_optin)} funnel opt-in"
     return [
-        ("Blended webinar registrations", n(leads) if have else "—", "Hyros, all attributed sources"),
+        ("Webinar registrations", n(leads) if have else "—", sub),
         ("Cost per registration", money(cost_per_lead) if cost_per_lead else "—", "Spend ÷ registrations"),
         ("Link clicks", n(link_clicks), "Outbound to the page"),
         ("Cost per link click", money(cost_per_click), "Spend ÷ link clicks"),
         ("Total ad spend", money(spend, 2), spend_def),
-        ("Conversion rate", pct(conv) if conv else "—", "Hyros registrations ÷ link clicks"),
+        ("Conversion rate", pct(conv) if conv else "—", "Registrations ÷ link clicks"),
     ]
 
 
 def today_html(t):
-    """Today's blended box. Outside the window tabs because it is always today, whichever
-    tab is showing, and visually separated because it mixes two sources."""
+    """Today's box. Outside the window tabs because it is always today, whichever tab is
+    showing, and set apart because it is the figure the day is steered on."""
     if not t:
         return ""
-    hy = t.get("hyros")
-    stale = bool(hy and hy.get("stale"))
-    have = bool(hy and hy.get("leads"))
+    have = bool(t.get("leads"))
 
-    cells = blended_cells(hy["leads"] if have else 0, t.get("cost_per_lead"),
+    cells = blended_cells(t.get("leads", 0), t.get("cost_per_lead"),
                           t["link_clicks"], t["cost_per_link_click"], t["spend"],
-                          t.get("conv_rate"), "Amount spent today", have)
+                          t.get("conv_rate"), "Amount spent today", have,
+                          t.get("lead_form", 0), t.get("page_optin", 0))
 
-    if not have:
-        note = ('<span class="tflag bad">Hyros not connected</span> '
-                'Registrations, cost per registration and conversion rate need a PBI-scoped '
-                'Hyros API key at <code>PBI 2/hyros_key.txt</code>. Spend and link clicks '
-                'above are Meta\'s and are live.')
-    elif stale:
-        note = (f'<span class="tflag bad">Stale</span> These registration figures are from '
-                f'{fmt_day(hy["date"])}, not today. They were seeded through the Hyros MCP and '
-                f'cannot refresh on their own; add the API key to make this box live.')
-    else:
-        note = (f'Registrations come from {e(hy.get("source", "Hyros"))}, and every registration '
-                f'figure on this page is built the same way, down to the individual creative. '
-                f'Spend and link clicks are Meta\'s.')
+    note = ('Registrations are Meta\'s <b>Lead (form)</b> count plus the opt-ins the funnel '
+            'page records, added together. Both halves are shown above so either can be '
+            'checked against its own source, and every registration figure on this page is '
+            'built the same way, down to the individual creative. Spend and link clicks are '
+            'Meta\'s. Today is still open, so all six figures are partial.')
 
     return summary_box(f'Today · {fmt_day(t["date"])}',
-                       "Blended webinar registrations",
-                       "Every registration Hyros credits today, from every source, against "
-                       "today\'s ad spend. This is the number to steer on.",
-                       cells, note,
-                       "today-stale" if (stale or not have) else "", "box-today")
+                       "Webinar registrations",
+                       "Everyone who registered today, from the ads, against today\'s ad "
+                       "spend. This is the number to steer on.",
+                       cells, note, "", "box-today")
 
 
 def fmt_dt(iso, abbrev=""):
@@ -483,26 +481,35 @@ def week_html(w):
     span = f'{fmt_dt(w["opened"], tz)} – {fmt_dt(w["closed"], tz)}'
     cells = blended_cells(w["leads"], w.get("cost_per_lead"), w["link_clicks"],
                           w.get("cost_per_link_click"), w["spend"], w.get("conv_rate"),
-                          "Amount spent this week", have)
+                          "Amount spent this week", have,
+                          w.get("lead_form"), w.get("page_optin"))
 
     blurb = (f'PBI\'s webinar week: noon Central on Monday through noon Central the '
              f'following Monday, seven days end to end.')
+
+    # Every figure is sliced from Meta's hourly buckets, registrations included, so the
+    # noon boundary is exact rather than rounded to a whole day.
+    src = ('Every figure is sliced from Meta\'s hourly buckets, registrations included, '
+           'so the noon boundary is exact.')
+    if w.get("page_optin_restated"):
+        a, b = w.get("page_optin_span") or ("", "")
+        src = (f'Spend and link clicks are sliced from Meta\'s hourly buckets so the noon '
+               f'boundary is exact. The funnel-opt-in half is the funnel\'s own count for '
+               f'{fmt_day(a)}–{fmt_day(b)}: Meta\'s pixel was under-firing until it was '
+               f'repaired on {fmt_day(w["pixel_fix_date"])}, so this cycle is stated on the funnel '
+               f'rather than on the pixel.')
 
     if w["closing_now"]:
         note = (f'<span class="tflag">Open</span> {w["elapsed_hours"]} of '
                 f'{w["total_hours"]} hours counted, through '
                 f'{fmt_dt(w["api_closed"], tz)}. It closes at '
-                f'{fmt_dt(w["closed"], tz)} and will keep climbing until then. '
-                f'Spend and link clicks are sliced from Meta\'s hourly figures so the noon '
-                f'boundary is exact; registrations are Hyros.')
+                f'{fmt_dt(w["closed"], tz)} and will keep climbing until then. ' + src)
     else:
         note = (f'A complete cycle: {w["total_hours"]} hours, '
-                f'{fmt_dt(w["opened"], tz)} to {fmt_dt(w["closed"], tz)}. '
-                f'Spend and link clicks are sliced from Meta\'s hourly figures so the noon '
-                f'boundary is exact; registrations are Hyros.')
+                f'{fmt_dt(w["opened"], tz)} to {fmt_dt(w["closed"], tz)}. ' + src)
 
     return summary_box(f'Weekly summary · {span}',
-                       "Blended webinar registrations", blurb, cells, note,
+                       "Webinar registrations", blurb, cells, note,
                        "week" + (" week-open" if w["closing_now"] else ""), "box-week")
 
 
@@ -523,12 +530,26 @@ def prev_weeks_html(weeks):
       <tr>
         <td class="name">{e(fmt_dt(w["opened"], w.get("tz_abbrev", "")))}
             <span class="prev-to">to {e(fmt_dt(w["closed"], w.get("tz_abbrev", "")))}</span></td>
-        <td class="num strong">{n(w["leads"])}</td>
+        <td class="num strong">{n(w["leads"])}{'<span class="restated" title="Stated on the funnel&#39;s own opt-in count">·</span>' if w.get("page_optin_restated") else ''}</td>
         <td class="num">{money(w["cost_per_lead"])}</td>
         <td class="num">{n(w["link_clicks"])}</td>
         <td class="num">{money(w["cost_per_link_click"])}</td>
         <td class="num">{money(w["spend"])}</td>
       </tr>""" for w in weeks)
+
+    # A restated cycle has to say so in the table it appears in. Naming the marked rows
+    # once below the table beats a superscript on each: there is one reason, not three.
+    restated = [w for w in weeks if w.get("page_optin_restated")]
+    restated_note = ""
+    if restated:
+        fix = fmt_day(restated[0]["pixel_fix_date"])
+        restated_note = (
+            f'<p class="note note-warn"><b>Cycles marked ·</b> The funnel pixel was '
+            f'under-firing until it was repaired on {fix}, so Meta saw only part of the '
+            f'opt-ins on the funnel page during these weeks. Those cycles are stated on '
+            f'the funnel\'s own <b>Opt in v2</b> count instead of on the pixel, which is '
+            f'why they read higher than Meta alone would report. The lead-form half is '
+            f'Meta\'s throughout and was never affected.</p>')
 
     return f"""
   <section class="prevweeks">
@@ -544,6 +565,7 @@ def prev_weeks_html(weeks):
         <tbody>{rows}</tbody>
       </table>
     </div>
+    {restated_note}
   </section>"""
 
 
@@ -561,11 +583,11 @@ def window_html(key, w, cr, active):
     blocks = ""
     thin_flagged = False
     for fmt, title, blurb in (
-        ("IMAGE", "Best images", "The strongest still creatives, ranked by the same Hyros "
+        ("IMAGE", "Best images", "The strongest still creatives, ranked on the same "
                                  "registrations reported at the top of this page, then by cost "
                                  "per registration."),
         ("VIDEO", "Best videos", "The strongest video creatives, ranked on exactly the same five "
-                                 "Hyros-based metrics as the images, so the two formats are "
+                                 "metrics as the images, so the two formats are "
                                  "directly comparable."),
     ):
         cards, pool_n, picked = featured_block(ads, fmt, cr)
@@ -632,8 +654,24 @@ def window_html(key, w, cr, active):
     lead_ads = sum(1 for a in ads if a["leads"])
     zero_spend = money(sum(a["spend"] for a in ads if not a["leads"]))
 
+    # A window that reaches back before the pixel repair still carries the pixel's
+    # undercount on its funnel-opt-in half, and unlike the weekly cycles it cannot be
+    # restated: the funnel's stats have no per-ad breakdown. Say so at the top of the
+    # window rather than letting the creative board quietly under-rank landing-page ads.
+    pre_fix_note = ""
+    if w.get("page_optin_understated"):
+        pre_fix_note = (
+            f'<p class="note note-warn"><b>This window reaches back before '
+            f'{fmt_day(w["pixel_fix_date"])}</b>, '
+            'when the funnel pixel was repaired. Lead-form ads are exact throughout, but ads '
+            'that send traffic to the funnel page are undercounted for the days before the '
+            'repair, so they rank lower here than they actually performed. The weekly cycles '
+            'above are restated on the funnel\'s own count and are not affected. For a clean '
+            'comparison between the two kinds of ad, use <b>Last 7 days</b>.</p>')
+
     return f"""
   <div class="win" id="win-{key}" data-label="{e(w['label'])}"{'' if active else ' hidden'}>
+    {pre_fix_note}
     {blocks}
     {thin_note}
 
@@ -767,7 +805,6 @@ def build(snap):
         client=e(m["client"]), account=e(m["account_label"]), account_id=e(m["account_id"]),
         stamp=e(fmt_stamp(m["pulled_at"], m.get("timezone_abbrev", ""))),
         live_count=len(live), matched=len(m["campaigns_matched"]),
-        lead_action=e(m["lead_action"]),
         tabs=tabs, windows=wins,
         today=(today_html(snap.get("today")) + week_html(snap.get("week"))
                + prev_weeks_html(snap.get("prev_weeks"))),
@@ -783,7 +820,9 @@ def build(snap):
         live_cfg=json.dumps({
             "account_id": m["account_id"],
             "campaign_match": m.get("campaign_match", "webinar"),
-            "lead_action": m["lead_action"],
+            "lead_form_action": m["lead_form_action"],
+            "page_optin_action": m["page_optin_action"],
+            "pixel_fix_date": m.get("pixel_fix_date"),
             "account_tz": m.get("timezone", "America/Los_Angeles"),
             "week_tz": m.get("week_tz", "America/Chicago"),
             "launch": m.get("window_start")
@@ -1184,6 +1223,14 @@ section {{ margin-top: 56px; }}
   border-left: 2px solid var(--accent); border-radius: 2px;
   font-size: 13px; color: var(--ink-2); max-width: 78ch;
 }}
+/* A measurement caveat, not a styling flourish: it has to read as a caution above the
+   creative board rather than as another grey aside below it. */
+.restated {{ color: var(--citron); margin-left: 3px; font-weight: 700; cursor: help; }}
+.note-warn {{
+  margin: 0 0 22px; border-left-color: var(--citron);
+  background: color-mix(in srgb, var(--citron) 12%, var(--sunk));
+  color: var(--ink); max-width: none;
+}}
 
 /* ---------- featured cards ---------- */
 /* Every creative the same size. Rank is carried by the number in the header and by
@@ -1574,17 +1621,30 @@ td.name {{ min-width: 240px; }}
       <li><b>Five metrics, everywhere.</b> Registrations, cost per registration, link clicks,
           cost per link click, and total spent. Every ranking on this page uses them and
           nothing else, so a video and a still are judged on the same terms.</li>
-      <li><b>One registration number, everywhere.</b> Every registration figure on this page,
-          from the headline down to a single creative, is the <b>Hyros</b> count under
-          last-click attribution. Meta's own Lead pixel is not used for any ranking: it sees
-          only the registrations it can match itself, and it undercounts this funnel by
-          roughly three to one. Using both would put two different answers on one page.</li>
+      <li><b>One registration number, everywhere, and you can check it.</b> A registration is
+          an <b>on-Meta lead form</b> plus an <b>opt-in on the funnel page</b>, added together.
+          Both halves are printed under every headline figure. The lead-form half is what Meta
+          reports in its own <b>Lead (form)</b> column. The funnel half is what GoHighLevel
+          records on the <b>Opt in v2</b> step of the Weekly Webinar [Facebook] funnel. Those
+          two numbers, on the same dates, are this page's registration count: nothing here is
+          blended, modelled or attributed by a third party.</li>
+      <li><b>Why the two halves are separate.</b> Most registrations now arrive through
+          on-Meta lead forms, and those people never load the funnel page at all. Checking the
+          funnel's opt-in count on its own will therefore always come up short of the total,
+          which is correct rather than a discrepancy: it is one of the two halves.</li>
+      <li><b>The funnel pixel was repaired on 27 August 2026.</b> Before that it fired on a
+          fraction of opt-ins: on 20 August the funnel recorded 57 and the pixel saw 15. Weekly
+          cycles that opened before the repair are therefore stated on the funnel's own count
+          rather than on the pixel, and each says so. Cycles after it are Meta's, which now
+          agrees with the funnel to within about a tenth. Creative-level figures in windows
+          reaching back before the repair still carry the pixel's undercount, because the
+          funnel's stats have no per-ad breakdown to correct them against.</li>
       <li><b>Scope.</b> Every campaign in Meta ad account {account_id} whose name contains
           "webinar", matched by name rather than by a fixed ID list so next week's campaign is
           picked up without editing anything. {matched} campaigns match; {live_count} are
           active.</li>
       <li><b>Spend and link clicks are Meta's.</b> Cost per registration pairs Meta's spend
-          with Hyros's registrations, the same way at every level of the page. Link clicks are
+          with the registration count above, the same way at every level of the page. Link clicks are
           the clicks that actually left for the landing page: all-clicks runs about 2.4x
           higher on this account and would flatter both the count and the cost.</li>
       <li><b>Ranking.</b> Registrations first, then cost per registration, then spend. Volume
@@ -1596,7 +1656,8 @@ td.name {{ min-width: 240px; }}
           two-dollar ad cannot weigh as much as a two-hundred-dollar one.</li>
       <li><b>Thin data.</b> Ads under {thin_spend} spent or under {thin_clicks} link clicks are
           flagged. Their cost per registration is one event, not a rate.</li>
-      <li><b>Source.</b> Meta Graph API v21.0 and the Hyros attribution API, both read-only.
+      <li><b>Source.</b> Meta Graph API v21.0, read-only, plus the GoHighLevel funnel stats
+          page for the pre-repair weekly cycles.
           All Meta figures are on the ad account's own clock, America/Los_Angeles. Creatives
           are downloaded and embedded because Meta's image links are signed and expire.
           Nothing on this page is estimated or inferred.</li>
@@ -1633,23 +1694,21 @@ td.name {{ min-width: 240px; }}
   <div class="keybox">
     <h3 id="key-title">Live data keys</h3>
     <p>This page is a static file: it holds no credentials, because the repository that
-       publishes it is public. Enter your own read-only keys and Refresh will call Meta and
-       Hyros <b>directly from this browser</b> instead of waiting for the next scheduled
-       build. The keys are stored on this device only, are sent to nobody but Meta and
-       Hyros, and never reach the repository or the published page.</p>
+       publishes it is public. Enter your own read-only Meta token and Refresh will call
+       Meta <b>directly from this browser</b> instead of waiting for the next scheduled
+       build. The token is stored on this device only, is sent to nobody but Meta, and
+       never reaches the repository or the published page.</p>
     <label for="key-meta">Meta access token</label>
     <input id="key-meta" type="password" autocomplete="off" spellcheck="false" placeholder="EAA…">
-    <label for="key-hyros">Hyros API key</label>
-    <input id="key-hyros" type="password" autocomplete="off" spellcheck="false" placeholder="Hyros API key">
     <div class="keyrow">
-      <button class="btn-forget" id="key-forget" type="button">Forget these keys</button>
+      <button class="btn-forget" id="key-forget" type="button">Forget this token</button>
       <span class="spacer"></span>
       <button class="btn" id="key-cancel" type="button">Cancel</button>
       <button class="btn btn-primary" id="key-save" type="button">Save and refresh</button>
     </div>
-    <small>Meta: the same read-only system-user token with <code>ads_read</code> the build
-       uses. Hyros: Settings → API, scoped to the PBI account. Clearing this browser's site
-       data clears both.</small>
+    <small>The same read-only system-user token with <code>ads_read</code> that the build
+       uses. Registrations come from this one read now, so no second key is needed.
+       Clearing this browser's site data clears it.</small>
   </div>
 </div>
 
@@ -1675,7 +1734,7 @@ window.BUILD_STAMP = BUILD_STAMP;
 //
 // On the published copy the page is a static file and cannot hold a credential, because
 // the repository is public. So it asks the *reader* for one: with keys saved in this
-// browser (live.js, localStorage, this device only) Refresh calls Meta and Hyros itself
+// browser (live.js, localStorage, this device only) Refresh calls Meta itself
 // and repaints in place, which is the only path that is never stale.
 //
 // Without keys it falls back to its original job of checking whether a newer scheduled
@@ -1755,7 +1814,7 @@ async function checkForNewer() {{
       'late, so a published build can be a couple of hours old.<br><br>' +
       'This page ships with no credentials: the repository is public, so a key in the ' +
       'HTML would be a key on the open internet. For a pull that is never stale, press ' +
-      '<b>Turn on live data</b> and enter your own read-only Meta and Hyros keys. They ' +
+      '<b>Turn on live data</b> and enter your own read-only Meta token. It ' +
       'stay in this browser, on this device, and Refresh then calls both APIs directly ' +
       'and repaints the page in seconds.');
 }}
@@ -1791,14 +1850,12 @@ if (liveBtn) {{
 if (keyveil) {{
   document.getElementById('key-save').addEventListener('click', function () {{
     const m = document.getElementById('key-meta').value;
-    const h = document.getElementById('key-hyros').value;
-    if (!m.trim() || !h.trim()) {{
-      msg('Both keys are needed: registrations come from Hyros and spend comes from Meta, '
-          + 'and a missing Hyros key would read as zero registrations rather than as an error.',
-          true);
+    if (!m.trim()) {{
+      msg('A read-only Meta token is needed: spend, link clicks and both halves of the '
+          + 'registration count all come from the same Meta read.', true);
       return;
     }}
-    window.PBILive.saveKeys(m, h);
+    window.PBILive.saveKeys(m);
     const then = keyveil.__then;
     window.PBILive.closeKeyDialog();
     syncLiveBtn();

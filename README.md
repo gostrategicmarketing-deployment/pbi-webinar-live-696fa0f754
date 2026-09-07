@@ -7,7 +7,7 @@ A branded, client-facing dashboard for the webinar campaigns in Meta ad account
 **Live:** <https://gostrategicmarketing-deployment.github.io/pbi-webinar-live-696fa0f754/>
 
 ```bash
-python3 refresh.py     # pull Meta + Hyros, rebuild, publish live   <- the one command
+python3 refresh.py     # pull Meta, rebuild, publish live   <- the one command
 python3 serve.py       # local dashboard at :7771 with a working Refresh button
 ```
 
@@ -15,33 +15,69 @@ Or double-click **`refresh.command`** in Finder.
 
 ## The page, top to bottom
 
-1. **Blended webinar registrations** — today only, the hero. Every registration Hyros
-   credits today from every source, against today's ad spend. This is the number to
-   steer on.
+1. **Webinar registrations** — today only, the hero, with its two halves printed
+   underneath. This is the number to steer on.
 2. **Creative performance over [Since launch | Last 7 days]** — the window selector,
    deliberately below the hero so it clearly governs the creative and tables, not today.
 3. **Best images** and **Best videos** — top five of each format, ranked on the same
-   Hyros registrations reported in the hero.
+   registrations reported in the hero.
 4. **Day by day**, **By campaign**, **Every ad**, **Method**, **Brand palette**.
 
-## One registration number, everywhere
+## One registration number, everywhere, and the client can check it
 
-Every registration figure on the page, from the hero down to a single creative, is the
-**Hyros** count under last-click attribution. Meta's Lead pixel is not used for any
-ranking; it is kept per ad as `meta_pixel_leads` for reference only.
+A registration is an **on-Meta lead form** plus an **opt-in on the funnel page**, added
+together. Both halves are printed under every headline figure and both come from the same
+Meta read:
 
-That is not a cosmetic choice. Over 2026-08-11..13 Hyros credited **155** registrations at
-ad level against the pixel's **52**, and it *reorders* the board rather than just scaling
-it: `Video 06 | AC 2 | H1 | Ad #5` reads 2 registrations on the pixel and **78** on Hyros,
-taking it from mid-table to the single best creative in the account. Ranking on the pixel
-would have hidden the winner.
+| Half | Meta action | What it is | Where the client verifies it |
+|---|---|---|---|
+| Lead form | `onsite_conversion.lead_grouped` | instant form, never leaves Facebook | Meta's own **Lead (form)** column |
+| Page opt-in | `offsite_conversion.fb_pixel_lead` | the GoHighLevel funnel's opt-in step | the funnel's **Opt in v2** row |
 
-Spend and link clicks stay Meta's, and cost per registration pairs Meta spend with Hyros
-registrations at every level, so an ad's figure and the day's figure are built the same
-way.
+That is the whole definition. Nothing on the page is blended, modelled, or attributed by
+a third party, which is the point: every figure resolves to something the client can look
+up in a system they already have.
 
-Hyros `clicks` matched Meta `inline_link_clicks` exactly for a single day (296) but not
-over three (1792 against 1060), so link clicks are always read from Meta.
+**Until 2026-09-07 this page reported Hyros instead**, and that is what the change fixed.
+Hyros's totals were not far off — 43 against 43 on 2026-09-06, 1,405 against 1,360 over
+2026-08-07..09-07 — but nobody outside the agency could reproduce them, so every small
+divergence from Meta or from the funnel read as an error. Two concrete bugs went with it:
+
+- `LEAD_ACTION` was `offsite_conversion.fb_pixel_lead` **only**, and the lead-form
+  campaigns never emit that action. Every lead-form ad scored **zero** on Meta's figure,
+  which by September was the larger half of the programme (196 of 358 registrations over
+  2026-08-28..09-06).
+- The client, checking the funnel's opt-in count on its own, saw ~5 a day against a
+  headline of 13 and concluded the dashboard was inflated. It was not: the rest arrived
+  through lead forms that never load the funnel page. Printing both halves is what makes
+  that legible.
+
+### The funnel pixel was repaired on 2026-08-27
+
+See `../2026-08-27 - Pixel Events/`. Before that date the pixel fired on a fraction of
+opt-ins, so Meta's page-opt-in half is short for every earlier day. Measured against the
+funnel's own counter:
+
+| Window | Funnel "Opt in v2" | Meta pixel | captured |
+|---|---|---|---|
+| 2026-08-20 | 57 | 15 | 26% |
+| 2026-08-28..09-06 | 245 | 162 | 66% |
+| 2026-09-01..09-06 | 111 | 100 | 90% |
+| 2026-09-06 | 9 | 9 | 100% |
+| 2026-09-07 | 5 | 5 | 100% |
+
+So **weekly cycles that opened on or before the repair are restated** on the funnel's own
+count, held in `GHL_OPTINS` in `pull.py`, and each restated row is marked in the Previous
+weeks table. Cycles after it are Meta's. Keyed on the day a cycle *opened*, not the day it
+closed, so the 08-24 cycle — three of whose days predate the repair — is restated too.
+
+Creative-level figures cannot be restated this way: the funnel's stats have no per-ad
+breakdown. A window reaching back to the repair or earlier therefore carries the pixel's
+undercount on landing-page ads, and says so above the creative board. The default window,
+Last 7 days, is entirely after the repair.
+
+To re-measure or extend `GHL_OPTINS`, open `GHL_STATS_URL` (in `pull.py`), set the date
+range — the picker is **DD/MM/YYYY** — and read the **Opt in v2** row's Opt-Ins column.
 
 There is deliberately **no window-level KPI row**. A second set of totals on a different
 window read as a contradiction of the hero rather than as context.
@@ -59,9 +95,15 @@ recomputed from summed components, never averaged across ads.
 
 ## Clocks
 
-Meta reports on the ad account's **America/Los_Angeles** clock; Hyros on its own
-**-05:00 Central** clock. The two "today" boundaries sit two hours apart, so late-evening
-figures can disagree slightly until both days close. The page says so in the hero.
+Meta reports on the ad account's **America/Los_Angeles** clock. The weekly cycle runs
+noon-to-noon **America/Chicago**, and Central is two hours ahead of the account's clock all
+year, so the boundary always lands on the top of one of Meta's hourly buckets. Those
+buckets carry `actions` and sum to the day figure exactly, so registrations land on the
+noon boundary as precisely as spend does.
+
+The GoHighLevel funnel's stats page slices **whole days only**, so a restated cycle is
+counted over the seven days it opens on rather than noon-to-noon. That approximation is
+worth far less error than the thing it corrects.
 
 ## Scope
 
@@ -106,7 +148,7 @@ Format comes from the creative: a `video_id`, or `object_type == VIDEO`, makes i
 
 ## Refresh
 
-`refresh.py` pulls Meta, pulls Hyros, rebuilds the local `index.html` (for the serve.py
+`refresh.py` pulls Meta, rebuilds the local `index.html` (for the serve.py
 preview), then dispatches the deploy repo's `refresh` workflow, which does its own pull +
 build + deploy in the cloud (`build_type=workflow`; see the Schedule section).
 
@@ -115,19 +157,20 @@ build + deploy in the cloud (`build_type=workflow`; see the Schedule section).
 | Where | What Refresh does | How current |
 |---|---|---|
 | `serve.py` | POSTs `/refresh`: pull, rebuild, publish, reload | now |
-| Published, **live data on** | calls Meta + Hyros **from the browser** and repaints in place | now |
+| Published, **live data on** | calls Meta **from the browser** and repaints in place | now |
 | Published, no keys | re-checks whether a newer build has been published | as current as the last build |
 
 The published page ships with no credentials and never will: the repo has to be public for
 Pages, so a key in the HTML is a key on the open internet. The live path solves that by
-asking the *reader* for keys instead. **Turn on live data** takes a read-only Meta token
-and a PBI-scoped Hyros key, keeps them in that browser's `localStorage` on that device
-only, and sends them to nobody but Meta and Hyros. Nothing is written back to the repo, and
-a reader who never enters keys sees exactly the page they saw before.
+asking the *reader* for a token instead. **Turn on live data** takes a read-only Meta
+token, keeps it in that browser's `localStorage` on that device only, and sends it to
+nobody but Meta. Nothing is written back to the repo, and a reader who never enters a
+token sees exactly the page they saw before. Since 2026-09-07 there is only one key to
+enter: registrations come from the same Meta read as the spend.
 
-Phil holds the keys, so Phil gets a pull that is never stale. Erin sees the newest build.
+Phil holds the token, so Phil gets a pull that is never stale. Erin sees the newest build.
 
-A live pull repaints **today's blended box, the open weekly cycle, and all three windows**:
+A live pull repaints **today's box, the open weekly cycle, and all three windows**:
 totals, campaigns, day by day, every ad, and the featured creative cards, re-ranked. It
 deliberately leaves two things at their build-time values and says so in the status line
 rather than implying they were re-read:
@@ -145,13 +188,16 @@ its own file rather than inlined in `PAGE` so it stays editable JavaScript inste
 brace-doubled string, and so `node --check live.js` can vet it before a build.
 
 **It mirrors `pull.py` and has to keep mirroring it.** Same Graph fields, same
-`campaign.name CONTAIN` filter, same lowercase Hyros parameters (`last_click`,
-`facebook_ad`, `leads,cost,clicks` — this endpoint rejects the camel- and upper-case
-forms), same Hyros-over-pixel rule, same `rank_key`. `pull.py` now carries
-`campaign_match`, `window_start` and `week_tz` in the snapshot's `meta`, and `build.py`
-passes them through as `LIVE_CFG`, so the scope is defined once rather than twice. If you
-change what `pull.py` reads, change this with it or the live numbers and the built numbers
-will quietly disagree.
+`campaign.name CONTAIN` filter, the same two registration actions summed the same way,
+same `rank_key`. `pull.py` carries `campaign_match`, `window_start`, `week_tz`,
+`lead_form_action`, `page_optin_action` and `pixel_fix_date` in the snapshot's `meta`, and
+`build.py` passes them through as `LIVE_CFG`, so each is defined once rather than twice. If
+you change what `pull.py` reads, change this with it or the live numbers and the built
+numbers will quietly disagree.
+
+One thing it deliberately does **not** mirror: the `GHL_OPTINS` restatement. Those cycles
+are closed and are never repainted by a live refresh, so recomputing them from Meta in the
+browser would silently reinstate the undercount the restatement exists to remove.
 
 **It is parallel, which `pull.py` is not.** That is the whole reason to run this in a
 browser: `pull.py` is one thread asking for one thing at a time, and the same sequence of
@@ -159,13 +205,14 @@ browser: `pull.py` is one thread asking for one thing at a time, and the same se
 Issued concurrently it measures **under 7 seconds**. Three economies, all producing
 identical numbers:
 
-- The daily strip and the Hyros per-day reads cover the widest window once and are sliced
-  per window, rather than three overlapping sweeps.
+- The daily strip covers the widest window once and is sliced per window, rather than
+  three overlapping sweeps. Since 2026-09-07 it carries registrations too, so the per-day
+  reads that used to sit alongside it are gone entirely.
 - The campaign list asks Meta for `effective_status=["ACTIVE"]`, turning a paged read of
   220 campaigns into a single page of two: 3.9s down to 0.3s.
 - Everything independent goes at once: all three windows, the daily strip, the per-day
   reads, today's delivering campaigns and the open week, and within each window the ad and
-  campaign reads, and their two Hyros joins.
+  campaign reads.
 
 The ceiling on requests in flight is **global**, in `gate()`, not per call site. That is
 deliberate: the pull nests three deep, and per-call limits multiply, so six of them nested
@@ -173,16 +220,12 @@ is not six requests but dozens, which is how you trip Meta's app-level bucket an
 minutes for it to refill. Only the attempt is held; a retry's backoff waits outside the
 gate, so one throttled call cannot stall the other five slots.
 
-One rule it does not relax: **a failed Hyros read is not zero registrations.** Hyros
-answering with an error would otherwise repaint the hero as 0 and look like a real
-collapse, so a failed read aborts the whole refresh and leaves every number as it was.
+One rule it does not relax: **a failed read is not zero registrations.** Meta answering
+with an error would otherwise repaint the hero as 0 and look like a real collapse, so a
+failed read aborts the whole refresh and leaves every number as it was.
 
 Because that failure is fatal, it has to arrive fast: any 4xx but a throttle is a permanent
-answer and breaks out at once instead of being retried three times. The date format is the
-one to watch. Hyros rejects a timestamp with no UTC offset with
-`"There was a problem processing the date in the request."` and a 400, so the weekly cycle
-sends `2026-08-24T12:00:00-05:00`, never a naive local time. Plain `YYYY-MM-DD` is fine and
-is what the daily and today reads use.
+answer and breaks out at once instead of being retried three times.
 
 The DOM is patched rather than regenerated: rows and cards are cloned from ones already on
 the page and their cells rewritten, so `build.py` stays the only place this page's markup
@@ -190,10 +233,10 @@ is written.
 
 ### The schedule is a chain, not a cron (2026-08-27)
 
-The deploy repo's **`refresh` workflow** pulls Meta + Hyros, rebuilds, deploys, then
-**holds until it is 28 minutes old and starts the next run itself**. Credentials live in
-the repo's **Actions Secrets** (`FB_TOKEN`, `HYROS_API_KEY`, both read-only), reaching the
-scripts only as env vars during a run. The Mac plays no part.
+The deploy repo's **`refresh` workflow** pulls Meta, rebuilds, deploys, then
+**holds until it is 28 minutes old and starts the next run itself**. The credential lives
+in the repo's **Actions Secrets** (`FB_TOKEN`, read-only), reaching the scripts only as an
+env var during a run. The Mac plays no part.
 
 **GitHub's cron does not work on this repo and cannot be made to.** That is measured, not
 inferred:
@@ -306,8 +349,6 @@ Notes that keep this honest:
   throttled call can now cost about 13 minutes, which the hourly schedule absorbs; the
   job carries a 45-minute timeout so a bad hour cannot hold the `refresh` concurrency
   group against the next run.
-  Hyros reads retry three times for the same reason: an empty result there reads
-  downstream as *zero registrations*, so a hiccup would understate the hero silently.
 - GitHub disables cron in repos with no commit activity for 60 days; the workflow's last
   step pushes an empty keepalive commit whenever the newest commit is older than 50 days.
 
@@ -316,28 +357,24 @@ stale rather than as wrong.
 
 ## Credentials
 
-Both are read-only. Local runs read the files; cloud runs read the repo's Actions
-Secrets (same values, set 2026-08-14 via `gh secret set`).
+One key, read-only. Local runs read the file; cloud runs read the repo's Actions Secret
+(same value, set 2026-08-14 via `gh secret set`).
 
 | What | Local | Cloud | In the browser | Notes |
 |---|---|---|---|---|
 | Meta | `PBI 2/fb_token.txt` or `$FB_TOKEN` | secret `FB_TOKEN` | `localStorage.pbi_meta_token` | System user token, does not expire, `ads_read` |
-| Hyros | `PBI 2/hyros_key.txt` or `$HYROS_API_KEY` | secret `HYROS_API_KEY` | `localStorage.pbi_hyros_key` | PBI-scoped; mode `600` |
 
 The browser column is per device and per reader, entered through **Turn on live data** and
-cleared by **Forget these keys** or by clearing site data. Those values are read by
-`live.js` and sent to `graph.facebook.com` and `api.hyros.com` and to nothing else. They
-are never committed, never inlined into the page at build time, and never leave the device
-except as an `access_token` parameter and an `API-Key` header on those two hosts. Both APIs
-allow the browser call directly: Meta returns `access-control-allow-origin: *`, and Hyros
-allow-lists the Pages origin for the `api-key` header.
+cleared by **Forget this token** or by clearing site data. It is read by `live.js` and sent
+to `graph.facebook.com` and nothing else. It is never committed, never inlined into the
+page at build time, and never leaves the device except as an `access_token` parameter on
+that host, which allows the browser call directly (`access-control-allow-origin: *`).
 
-The Lance key in `Lance Morgan 2/Hyros Lookups/` is scoped to **his** Hyros account and
-returns an empty result for these campaigns. It is not a fallback.
+The Hyros key, the `HYROS_API_KEY` Actions Secret and `hyros_seed.json` are all unused as
+of 2026-09-07. The secret can stay where it is; nothing reads it.
 
-`hyros_seed.json` holds figures fetched through the Hyros MCP and is only read when the
-REST call cannot run. It carries its own date, so the hero greys itself out and says
-"Stale" rather than passing old numbers off as today's.
+The pre-repair funnel counts in `GHL_OPTINS` were read by hand from the GoHighLevel funnel
+stats page and need no credential: they are three fixed numbers in `pull.py`, not a feed.
 
 ## Branding
 
@@ -412,10 +449,11 @@ while returning no ad row.
 | `drift` | within `RECON_TOLERANCE_PCT` (1%), reported as normal attribution |
 | `differs` | outside tolerance; the page says to treat the pull as suspect |
 
-Only the two Meta-sourced figures are checked against Meta. Registrations get their own
-cross-check inside Hyros: the ad rows are summed and compared to the campaign-level answer
-for the same window (155 against 153 on 2026-08-13, a 1.3% gap). Both, plus the Meta pixel
-count for contrast, are printed into the page's Method note.
+All five figures are checked, registrations included, because they now come from the same
+Meta read as the spend rather than from a second system. Registrations get a second
+cross-check as well: the ad rows are summed and compared to the campaign-level answer for
+the same window, which should agree exactly unless an ad was deleted mid-window. Both, and
+the split into the two halves, are printed into the page's Method note.
 
 ## Files
 
@@ -423,15 +461,15 @@ count for contrast, are printed into the page's Method note.
 refresh.py      pull -> build -> dispatch cloud refresh   (what the button runs locally)
 refresh.command double-clickable wrapper
 serve.py        local server; makes the button real
-pull.py         Meta Graph + Hyros -> data/YYYY-MM-DDTHH_webinar_snapshot.json
+pull.py         Meta Graph -> data/YYYY-MM-DDTHH_webinar_snapshot.json; also holds
+                GHL_OPTINS, the hand-read funnel counts for the pre-repair cycles
 build.py        snapshot -> index.html (fonts + creatives + live.js inlined)
-live.js         the published page's live refresh: pulls Meta + Hyros in the
-                reader's browser and repaints in place. Mirrors pull.py.
+live.js         the published page's live refresh: pulls Meta in the reader's
+                browser and repaints in place. Mirrors pull.py.
 chain-watchdog.sh   restarts the refresh chain if it ever stops; does nothing
                 while it is healthy
 com.philglutting.pbi-webinar-chain.plist
                 launchd agent that runs the watchdog every 10 minutes
-hyros_seed.json MCP-fetched fallback, self-dating
 data/           one snapshot per pull, newest KEEP_SNAPSHOTS (48) retained
 creative-cache/ downscaled ad creatives, keyed on image identity
 .deploy/        clone of the Pages repo: scripts, fonts, logos, and the refresh
