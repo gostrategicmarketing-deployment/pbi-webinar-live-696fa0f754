@@ -318,15 +318,6 @@ def daily(since, until):
     return out
 
 
-def daily_merged(since, until, campaign_ids):
-    """Spend, link clicks and both registration components per day, all from Meta.
-
-    One source per day means the day strip adds up to the window totals above it, which
-    it could not do while the days and the totals came from two different systems.
-    """
-    return daily(since, until)
-
-
 def creatives(ad_ids):
     """Creative image, format, and the live post link, so every ad opens on Facebook.
 
@@ -517,7 +508,9 @@ def pull_window(since, until, label, note, campaign_ids):
         "totals": t,
         "reconciliation": recon,
         "campaigns": campaigns,
-        "daily": daily_merged(since, until, win_ids),
+        # One source per day means the day strip adds up to the window totals above it,
+        # which it could not do while the days and the totals came from two systems.
+        "daily": daily(since, until),
         "ads": ads,
     }
 
