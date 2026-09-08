@@ -449,11 +449,24 @@ def today_html(t):
                           t.get("conv_rate"), "Amount spent today", have,
                           t.get("lead_form", 0), t.get("page_optin", 0))
 
+    # The two traps that make a morning reading of this box look wrong, said plainly.
+    # Both were hit on 2026-09-08: the funnel showed 5 against a headline of 1, which was
+    # a total being compared with a half, on a figure Meta had not finished filling in.
     note = ('Registrations are Meta\'s <b>Lead (form)</b> count plus the opt-ins the funnel '
             'page records, added together. Both halves are shown above so either can be '
             'checked against its own source, and every registration figure on this page is '
             'built the same way, down to the individual creative. Spend and link clicks are '
-            'Meta\'s. Today is still open, so all six figures are partial.')
+            'Meta\'s.'
+            '<br><br>'
+            '<b>Reading this before the day closes.</b> Two things make an early figure look '
+            'wrong, and neither is an error. <b>Compare like with like:</b> GoHighLevel\'s '
+            '<b>Opt in v2</b> count lines up with the funnel-opt-in half above, never with the '
+            'total, because lead-form registrants never load the funnel page. And <b>Meta '
+            'backfills:</b> its same-day conversion counts arrive over the following hours, so '
+            'this number is always low while the day is open and keeps climbing after the ads '
+            'that earned it have run. Measured on Sep 7: the hours to 9am read 13 at the time '
+            'and read 16 once Meta caught up. A day only settles after it closes; on the last '
+            'two closed days the funnel counted 9 and 13 against Meta\'s 9 and 11.')
 
     return summary_box(f'Today · {fmt_day(t["date"])}',
                        "Webinar registrations",
@@ -1589,7 +1602,7 @@ td.name {{ min-width: 240px; }}
     <h1>Weekly Webinar<br>Performance</h1>
     <p class="band-meta">
       <span>Account <b>{account}</b> · {account_id}</span>
-      <span>Campaigns <b id="band-campaigns">{live_count} active</b> of {matched} webinar-named</span>
+      <span>Campaigns <b>all {matched} webinar-named</b>, <b id="band-campaigns">{live_count} delivering now</b></span>
       <span class="live">Updated <b id="stamp">{stamp}</b></span>
     </p>
     <div class="controls">
@@ -1641,8 +1654,10 @@ td.name {{ min-width: 240px; }}
           funnel's stats have no per-ad breakdown to correct them against.</li>
       <li><b>Scope.</b> Every campaign in Meta ad account {account_id} whose name contains
           "webinar", matched by name rather than by a fixed ID list so next week's campaign is
-          picked up without editing anything. {matched} campaigns match; {live_count} are
-          active.</li>
+          picked up without editing anything. All {matched} matching campaigns are included
+          in every figure, at ad, campaign and account level alike; {live_count} of them are
+          delivering right now, and a campaign paused mid-window keeps the spend and the
+          registrations it earned while it ran.</li>
       <li><b>Spend and link clicks are Meta's.</b> Cost per registration pairs Meta's spend
           with the registration count above, the same way at every level of the page. Link clicks are
           the clicks that actually left for the landing page: all-clicks runs about 2.4x

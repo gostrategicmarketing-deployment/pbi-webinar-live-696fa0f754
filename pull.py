@@ -408,7 +408,7 @@ def totals(ads):
     return t
 
 
-def pull_window(since, until, label, note, campaign_ids):
+def pull_window(since, until, label, note):
     """One window, entirely from Meta: spend, link clicks and both registration halves.
 
     Registrations are the lead-form count plus the page-opt-in count, per ad, so every
@@ -422,7 +422,6 @@ def pull_window(since, until, label, note, campaign_ids):
     ads = shape_ads(ad_rows)
 
     camp_rows = insights("campaign", since, until)
-    win_ids = [str(r["campaign_id"]) for r in camp_rows] or campaign_ids
     campaigns = []
     for r in camp_rows:
         form, page = reg_parts(r)
@@ -597,7 +596,7 @@ def ghl_restatement(opened, closed):
     return GHL_OPTINS.get(span), span
 
 
-def week_cycle(campaign_ids, opened, closed, now, label):
+def week_cycle(opened, closed, now, label):
     """One noon-Monday-to-noon-Monday cycle, on the same five metrics as every other box."""
     # Never ask Meta past now: an hour bucket that has not happened yet returns nothing,
     # and counting it as elapsed would understate the cycle's rates on live spend.
@@ -648,7 +647,7 @@ def week_cycle(campaign_ids, opened, closed, now, label):
     }
 
 
-def previous_weeks(campaign_ids, opened, now):
+def previous_weeks(opened, now):
     """Completed cycles before the open one, newest first, back to the program launch."""
     out = []
     launch = date.fromisoformat(WINDOW_START)
@@ -657,21 +656,10 @@ def previous_weeks(campaign_ids, opened, now):
         cur = cur - timedelta(days=7)
         if (cur + timedelta(days=7)).astimezone(ACCOUNT_TZ).date() <= launch:
             break                       # cycle closed before the program existed
-        w = week_cycle(campaign_ids, cur, cur + timedelta(days=7), now, "Previous week")
+        w = week_cycle(cur, cur + timedelta(days=7), now, "Previous week")
         if w["spend"] or w["leads"]:
             out.append(w)
     return out
-
-
-def delivering_campaign_ids(since, until):
-    """Every webinar campaign that actually delivered in this range, per Meta.
-
-    Selecting by ACTIVE status instead silently drops a campaign that has since been
-    paused while its spend still lands in the totals: on 2026-08-16 that was
-    `TOF | Weekly Webinar Lead Ads`, contributing $890.79 of spend and zero
-    registrations, which inflated cost per registration across every box.
-    """
-    return [str(r["campaign_id"]) for r in insights("campaign", since, until)]
 
 
 def prune(data_dir):
@@ -694,14 +682,17 @@ def main():
     live = [c for c in camps if c["effective_status"] == "ACTIVE"]
     print(f"  {len(camps)} campaigns match '{CAMPAIGN_MATCH}' ({len(live)} active)")
 
-    # Only the campaigns that actually run this funnel, not all 219 name-matched ones:
-    # the archived ones stopped in 2024 and only cost round trips.
-    live_ids = [c["id"] for c in live] or [c["id"] for c in camps[:2]]
+    # Nothing downstream takes a campaign id list any more. Every figure on this page
+    # comes from ONE Graph filter, `campaign.name CONTAIN "webinar"`, applied at ad,
+    # campaign, account and hourly level alike, so every webinar campaign that delivered
+    # in a window is in that window by construction. Selecting by ACTIVE status here as
+    # well used to be a second, narrower definition of scope sitting beside the filter,
+    # and a campaign paused mid-window would fall out of one but not the other.
 
     if len(sys.argv) >= 3:
         windows = {"launch": pull_window(
             sys.argv[1], sys.argv[2], "Custom window",
-            "Explicit window passed on the command line.", live_ids)}
+            "Explicit window passed on the command line.")}
         default_window = "launch"
     else:
         # Trailing windows never reach back before the program launched: those campaigns
@@ -712,13 +703,13 @@ def main():
         windows = {
             "3d": pull_window(
                 back(3), today.isoformat(), "Last 3 days",
-                "The trailing three days: what the account is doing right now.", live_ids),
+                "The trailing three days: what the account is doing right now."),
             "7d": pull_window(
                 back(7), today.isoformat(), "Last 7 days",
-                "The trailing seven days, matching the weekly webinar cadence.", live_ids),
+                "The trailing seven days, matching the weekly webinar cadence."),
             "launch": pull_window(
                 WINDOW_START, today.isoformat(), "Since launch",
-                "Everything since the weekly webinar program went live.", live_ids),
+                "Everything since the weekly webinar program went live."),
         }
         # The funnel runs on a weekly cycle, so the week is the honest default: three days
         # is a spot check and since-launch flattens this week into the average of all of
@@ -767,8 +758,8 @@ def main():
     }
 
     opened, closed = week_bounds(now)
-    wk = week_cycle(live_ids, opened, closed, now, "This week") if live_ids else None
-    prev = previous_weeks(live_ids, opened, now) if live_ids else []
+    wk = week_cycle(opened, closed, now, "This week")
+    prev = previous_weeks(opened, now)
     if wk:
         print(f"  week {wk['opened']} -> {wk['closed']} "
               f"({'open' if wk['closing_now'] else 'complete'}, "

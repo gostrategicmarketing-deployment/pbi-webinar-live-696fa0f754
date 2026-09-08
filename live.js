@@ -937,7 +937,7 @@
     var stamp = $('#stamp');
     if (stamp) stamp.textContent = fmtStamp(CFG.account_tz, snap.now);
     var band = $('#band-campaigns');
-    if (band) band.textContent = snap.live_count + ' active';
+    if (band) band.textContent = snap.live_count + ' delivering now';
     document.body.classList.add('is-live');
   }
 
