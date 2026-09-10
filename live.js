@@ -2,17 +2,18 @@
    live.js — the Refresh button, run entirely in the reader's browser.
 
    The published page is a static file on GitHub Pages. It cannot hold the Meta
-   token, because the repo is public and a key in the HTML is a key on the open
-   internet. So the token lives in the *reader's* browser: entered once, kept in
-   localStorage on that device, sent only to Meta. Nothing is transmitted
-   anywhere else, and nothing is written back to the repo.
+   or Hyros credentials, because the repo is public and a key in the HTML is a
+   key on the open internet. So the credentials live in the *reader's* browser:
+   entered once, kept in localStorage on that device, sent only to Meta and to
+   Hyros. Nothing is transmitted anywhere else, and nothing is written back to
+   the repo.
 
-   A reader who has not entered a token (the client, on any device) sees exactly the
+   A reader who has not entered keys (the client, on any device) sees exactly the
    page they saw before: the newest hourly build, with the button falling back to
    its old job of checking whether a newer build has been published.
 
    WHAT A LIVE REFRESH COVERS
-     today's box, the open weekly cycle, and all three windows: totals,
+     today's blended box, the open weekly cycle, and all three windows: totals,
      campaigns, day-by-day, every ad, and the featured creative cards.
 
    WHAT IT DOES NOT
@@ -21,22 +22,21 @@
      pull rather than a figure. Both keep their build-time values and the page
      says so after a live refresh rather than implying they were re-read.
 
-     The pre-repair cycles in particular are stated on the GoHighLevel funnel's
-     own opt-in count, which has no API here, so a live refresh must never
-     recompute them from Meta or it would silently reinstate the undercount.
-
    FIDELITY
      Every call here mirrors pull.py: the same Graph fields, the same filter,
-     the same two registration actions summed the same way, and the same
-     ranking. If pull.py changes, this changes with it or the two will quietly
-     disagree.
+     the same lowercase Hyros parameters (`last_click`, `facebook_ad`, not the
+     camel- or upper-case forms, which this endpoint rejects), the same
+     Hyros-over-pixel rule, and the same ranking. If pull.py changes, this
+     changes with it or the two will quietly disagree.
    ========================================================================== */
 (function () {
   'use strict';
 
   var CFG = window.LIVE_CFG || {};
   var GRAPH = 'https://graph.facebook.com/v21.0';
+  var HYROS = 'https://api.hyros.com/v1/api/v1.0';
   var LS_META = 'pbi_meta_token';
+  var LS_HYROS = 'pbi_hyros_key';
   var THIN_SPEND = CFG.thin_spend || 25;
   var THIN_CLICKS = CFG.thin_clicks || 20;
   var FEATURED = CFG.featured_n || 5;
@@ -45,9 +45,12 @@
   /* ---------------------------------------------------------- credentials */
 
   function creds() {
-    return { meta: (localStorage.getItem(LS_META) || '').trim() };
+    return {
+      meta: (localStorage.getItem(LS_META) || '').trim(),
+      hyros: (localStorage.getItem(LS_HYROS) || '').trim()
+    };
   }
-  function armed() { return !!creds().meta; }
+  function armed() { var c = creds(); return !!(c.meta && c.hyros); }
 
   /* ------------------------------------------- formatting, as in build.py */
 
@@ -120,7 +123,7 @@
       .formatToParts(d).filter(function (x) { return x.type === 'timeZoneName'; });
     return p.length ? p[0].value : '';
   }
-  /** '2026-08-24T12:00:00-05:00' — the shape pull.py uses for cycle boundaries. */
+  /** '2026-08-24T12:00:00-05:00' — the shape Hyros and pull.py both use. */
   function isoOffset(tz, d, withSeconds) {
     var p = partsIn(tz, d);
     var off = Math.round(tzOffsetMs(tz, d) / 60000);
@@ -149,44 +152,6 @@
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
-  /**
-   * One global ceiling on requests in flight.
-   *
-   * The reason to do this in a browser at all is that it can ask for many things at
-   * once where pull.py, on one thread, asks for them one after another: the same
-   * sequence measured 45s sequentially, which is far too long to sit behind a
-   * button. Unbounded is the opposite mistake, and Meta's app-level bucket takes
-   * minutes to refill once tripped.
-   *
-   * The limit is global rather than per-call on purpose. The pull nests: three
-   * windows run together, each asking for ads and campaigns together, each of those
-   * fanning out into batched reads. Per-call limits multiply, and six of them
-   * nested three deep is not six requests, it is dozens. One gate that every request
-   * passes through cannot be nested around.
-   *
-   * Only the attempt itself is held. A retry's backoff waits outside the gate, so
-   * one throttled call cannot stall the other five slots for twenty seconds.
-   */
-  var GATE = { limit: 6, active: 0, queue: [] };
-  function gateDrain() {
-    while (GATE.active < GATE.limit && GATE.queue.length) GATE.queue.shift()();
-  }
-  function gate(task) {
-    return new Promise(function (resolve, reject) {
-      GATE.queue.push(function () {
-        GATE.active++;
-        var done = function () { GATE.active--; gateDrain(); };
-        task().then(function (v) { done(); resolve(v); },
-                    function (e) { done(); reject(e); });
-      });
-      gateDrain();
-    });
-  }
-
-  // Reads completed this refresh. With the work running in parallel the phase labels
-  // stop arriving in a tidy order, so the count is what actually shows progress.
-  var READS = { done: 0 };
-
   function qs(params) {
     var u = new URLSearchParams();
     Object.keys(params).forEach(function (k) { u.set(k, params[k]); });
@@ -203,14 +168,14 @@
     for (var attempt = 0; attempt < 4; attempt++) {
       var r, j;
       try {
-        r = await gate(function () { return fetch(url, { cache: 'no-store' }); });
+        r = await fetch(url, { cache: 'no-store' });
         j = await r.json().catch(function () { return {}; });
       } catch (e) {
         lastErr = 'network error';
         await sleep(1500 * Math.pow(2, attempt));
         continue;
       }
-      if (r.ok && !j.error) { READS.done++; return j; }
+      if (r.ok && !j.error) return j;
       var code = j.error && j.error.code;
       lastErr = (j.error && j.error.message) || ('HTTP ' + r.status);
       // A real fault (100 bad field, 190 dead token) fails at once; a throttle waits.
@@ -224,13 +189,76 @@
     var j = await graph(path, params);
     var out = (j.data || []).slice(), guard = 0;
     while (j.paging && j.paging.next && guard++ < 40) {
-      var nextUrl = j.paging.next;
-      var r = await gate(function () { return fetch(nextUrl, { cache: 'no-store' }); });
+      var r = await fetch(j.paging.next, { cache: 'no-store' });
       j = await r.json();
       if (j.error) throw new Error('Meta: ' + j.error.message);
       out = out.concat(j.data || []);
     }
     return out;
+  }
+
+  /**
+   * One Hyros /attribution read, in pull.py's parameter casing.
+   *
+   * A failure here is NOT neutral: an empty result reads downstream as *zero
+   * registrations*, which would silently understate every figure on the page.
+   * So this throws after its retries rather than degrading, and the whole
+   * refresh aborts with the numbers left as they were.
+   */
+  async function hyrosCall(level, ids, since, until) {
+    if (!ids || !ids.length) return [];
+    var url = HYROS + '/attribution?' + qs({
+      startDate: since, endDate: until,
+      attributionModel: 'last_click',
+      level: level,
+      fields: 'leads,cost,clicks',
+      ids: ids.join(',')
+    });
+    var lastErr = 'no attempt made';
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        var r = await fetch(url, { cache: 'no-store', headers: { 'API-Key': creds().hyros } });
+        if (r.ok) {
+          var j = await r.json();
+          return j.result || [];
+        }
+        lastErr = 'HTTP ' + r.status;
+        if (r.status === 401 || r.status === 403) break;   // a wrong key will not fix itself
+      } catch (e) {
+        lastErr = 'network error';
+      }
+      if (attempt < 2) await sleep(1200 * Math.pow(2, attempt));
+    }
+    throw new Error('Hyros: ' + lastErr);
+  }
+
+  /** Hyros rejects ids=ALL, so ad reads go in batches, as in pull.py. */
+  async function hyrosById(level, ids, since, until, batch) {
+    batch = batch || 20;
+    var out = {};
+    for (var i = 0; i < ids.length; i += batch) {
+      var rows = await hyrosCall(level, ids.slice(i, i + batch), since, until);
+      rows.forEach(function (r) {
+        if (!r || typeof r !== 'object') return;
+        out[String(r.id)] = {
+          leads: parseInt(r.leads || 0, 10),
+          cost: r2(parseFloat(r.cost || 0)),
+          clicks: parseInt(r.clicks || 0, 10)
+        };
+      });
+    }
+    return out;
+  }
+
+  async function hyrosRange(campaignIds, since, until) {
+    var rows = (await hyrosCall('facebook_campaign', campaignIds, since, until))
+      .filter(function (r) { return r && typeof r === 'object'; });
+    if (!rows.length) return null;
+    return {
+      leads: rows.reduce(function (a, r) { return a + parseInt(r.leads || 0, 10); }, 0),
+      cost: r2(rows.reduce(function (a, r) { return a + parseFloat(r.cost || 0); }, 0)),
+      clicks: rows.reduce(function (a, r) { return a + parseInt(r.clicks || 0, 10); }, 0)
+    };
   }
 
   /* --------------------------------------------------------- Meta reading */
@@ -246,7 +274,7 @@
   }
   function fnum(row, field) { return parseFloat(row[field] || 0) || 0; }
 
-  /** [lead-form, page-opt-in] registrations, matching pull.py's reg_parts(). */
+  /** [lead-form, page-opt-in] from Meta's actions, matching pull.py's reg_parts(). */
   function regParts(row) {
     var a = acts(row);
     return [parseInt(a[CFG.lead_form_action] || 0, 10),
@@ -264,6 +292,25 @@
     });
   }
 
+  /** {date: [campaign_id, ...]} for the range, in ONE Meta read. Hyros has to be asked
+      about the campaigns that delivered on each DAY: reusing one list for the whole range
+      loses any campaign paused partway through, silently and with no error. */
+  async function metaCampaignDays(since, until) {
+    var rows = await graphAll('/' + ACT + '/insights', {
+      level: 'campaign',
+      fields: 'campaign_id',
+      filtering: filterJSON(),
+      time_range: JSON.stringify({ since: since, until: until }),
+      time_increment: 1,
+      limit: 500
+    });
+    var out = {};
+    rows.forEach(function (r) {
+      (out[r.date_start] = out[r.date_start] || []).push(String(r.campaign_id));
+    });
+    return out;
+  }
+
   async function metaDaily(since, until) {
     var rows = await graphAll('/' + ACT + '/insights', {
       level: 'account',
@@ -274,82 +321,71 @@
       limit: 500
     });
     return rows.map(function (r) {
-      var p = regParts(r);
       return {
         date: r.date_start,
         spend: r2(fnum(r, 'spend')),
         link_clicks: parseInt(fnum(r, 'inline_link_clicks'), 10),
-        lead_form: p[0],
-        page_optin: p[1],
-        leads: p[0] + p[1]
+        meta_lead_form: regParts(r)[0],
+        meta_page_optin: regParts(r)[1]
       };
     });
   }
 
-  /** Spend, link clicks and both registration halves between two instants, from Meta's
-      hourly buckets. The buckets carry `actions` and sum to the day figure exactly, so
-      registrations land on the noon boundary as precisely as spend does. */
+  /** Spend and link clicks between two instants, from Meta's hourly buckets. */
   async function metaInstantRange(opened, closed) {
     var tz = CFG.account_tz;
     var rows = await graphAll('/' + ACT + '/insights', {
       level: 'account',
-      fields: 'spend,inline_link_clicks,actions',
+      fields: 'spend,inline_link_clicks',
       breakdowns: 'hourly_stats_aggregated_by_advertiser_time_zone',
       filtering: filterJSON(),
       time_range: JSON.stringify({ since: ymd(tz, opened), until: ymd(tz, closed) }),
       time_increment: 1,
       limit: 500
     });
-    var spend = 0, clicks = 0, hours = 0, form = 0, page = 0;
+    var spend = 0, clicks = 0, hours = 0;
     rows.forEach(function (r) {
       var bucket = r.hourly_stats_aggregated_by_advertiser_time_zone || '';
       var hour = parseInt(bucket.slice(0, 2), 10);
       if (isNaN(hour)) return;
-      var d = r.date_start.split('-').map(Number);
-      var stamp = zoned(tz, d[0], d[1], d[2], hour, 0);
+      var p = r.date_start.split('-').map(Number);
+      var stamp = zoned(tz, p[0], p[1], p[2], hour, 0);
       if (stamp >= opened && stamp < closed) {
         spend += fnum(r, 'spend');
         clicks += parseInt(fnum(r, 'inline_link_clicks'), 10);
-        var p = regParts(r);
-        form += p[0];
-        page += p[1];
         hours += 1;
       }
     });
-    return { spend: r2(spend), clicks: clicks, hours: hours, lead_form: form, page_optin: page };
+    return { spend: r2(spend), clicks: clicks, hours: hours };
   }
 
   async function creativeMap(adIds) {
-    var chunks = [];
-    for (var i = 0; i < adIds.length; i += 40) chunks.push(adIds.slice(i, i + 40));
-    var parts = await Promise.all(chunks.map(function (chunk) {
-      return graph('/', {
-        ids: chunk.join(','),
-        fields: 'id,creative{image_url,thumbnail_url,object_type,video_id}'
-      }).catch(function () { return {}; });     // thumbnails are cosmetic, never fatal
-    }));
     var out = {};
-    parts.forEach(function (d) {
-      Object.keys(d || {}).forEach(function (adId) {
-        var c = (d[adId] && d[adId].creative) || {};
-        out[adId] = {
-          format: (c.video_id || c.object_type === 'VIDEO') ? 'VIDEO' : 'IMAGE',
-          thumb: c.image_url || c.thumbnail_url || ''
-        };
-      });
-    });
+    for (var i = 0; i < adIds.length; i += 40) {
+      var chunk = adIds.slice(i, i + 40);
+      try {
+        var d = await graph('/', {
+          ids: chunk.join(','),
+          fields: 'id,creative{image_url,thumbnail_url,object_type,video_id}'
+        });
+        Object.keys(d).forEach(function (adId) {
+          var c = (d[adId] && d[adId].creative) || {};
+          out[adId] = {
+            format: (c.video_id || c.object_type === 'VIDEO') ? 'VIDEO' : 'IMAGE',
+            thumb: c.image_url || c.thumbnail_url || ''
+          };
+        });
+      } catch (e) { /* thumbnails are cosmetic: never fail the report over them */ }
+    }
     return out;
   }
 
   /* -------------------------------------------------------------- shaping */
 
-  function metrics(spend, clicks, leadForm, pageOptin) {
-    var leads = leadForm + pageOptin;
+  function metrics(spend, leads, clicks) {
     return {
       spend: r2(spend),
       leads: leads,
-      lead_form: leadForm,
-      page_optin: pageOptin,
       link_clicks: clicks,
       cost_per_lead: leads ? r2(spend / leads) : null,
       cost_per_link_click: clicks ? r2(spend / clicks) : null
@@ -381,23 +417,10 @@
 
   /* ------------------------------------------------------- the whole pull */
 
-  /**
-   * One window's ads and campaigns.
-   *
-   * `daily` is deliberately not built here. The daily strip and the per-day
-   * reads cover the widest window and are sliced per window by the caller, so three
-   * windows do not ask for the same days three times.
-   */
-  async function pullWindow(key, since, until, campaignIds, say) {
-    say('Reading ' + CFG.window_labels[key].toLowerCase());
+  async function pullWindow(key, since, until, campaignIds, dailyAll, hyDailyAll, say) {
+    say('Reading ' + CFG.window_labels[key].toLowerCase() + ' from Meta');
 
-    // Ad rows and campaign rows are independent reads.
-    var rows = await Promise.all([
-      insights('ad', since, until, ',adset_name,ad_id,ad_name'),
-      insights('campaign', since, until)
-    ]);
-    var adRows = rows[0], campRows = rows[1];
-
+    var adRows = await insights('ad', since, until, ',adset_name,ad_id,ad_name');
     var ads = adRows.map(function (r) {
       var p = regParts(r);
       return Object.assign({
@@ -405,44 +428,63 @@
         ad_name: r.ad_name,
         adset_name: r.adset_name,
         campaign_name: r.campaign_name,
-        impressions: parseInt(fnum(r, 'impressions'), 10)
-      }, metrics(fnum(r, 'spend'), parseInt(fnum(r, 'inline_link_clicks'), 10), p[0], p[1]));
+        impressions: parseInt(fnum(r, 'impressions'), 10),
+        meta_lead_form: p[0],
+        meta_page_optin: p[1]
+      }, metrics(fnum(r, 'spend'), 0, parseInt(fnum(r, 'inline_link_clicks'), 10)));
     });
-    ads.forEach(function (a) { a.thin = isThin(a); });
 
+    say('Reading ' + CFG.window_labels[key].toLowerCase() + ' registrations from Hyros');
+    var hyAds = await hyrosById('facebook_ad', ads.map(function (a) { return a.ad_id; }),
+                                since, until);
+    ads.forEach(function (a) {
+      var h = hyAds[a.ad_id];
+      a.leads = h ? h.leads : 0;
+      a.cost_per_lead = a.leads ? r2(a.spend / a.leads) : null;
+      a.thin = isThin(a);
+    });
+
+    var campRows = await insights('campaign', since, until);
     var winIds = campRows.map(function (r) { return String(r.campaign_id); });
     if (!winIds.length) winIds = campaignIds;
-
+    var hyCamps = await hyrosById('facebook_campaign', winIds, since, until);
     var campaigns = campRows.map(function (r) {
-      var p = regParts(r);
-      return Object.assign({ campaign_id: String(r.campaign_id), campaign_name: r.campaign_name },
-        metrics(fnum(r, 'spend'), parseInt(fnum(r, 'inline_link_clicks'), 10), p[0], p[1]));
+      var cid = String(r.campaign_id);
+      var leads = (hyCamps[cid] || {}).leads || 0;
+      return Object.assign({ campaign_id: cid, campaign_name: r.campaign_name },
+        metrics(fnum(r, 'spend'), leads, parseInt(fnum(r, 'inline_link_clicks'), 10)));
     }).sort(function (a, b) { return b.spend - a.spend; });
 
     var totals = metrics(
       ads.reduce(function (s, a) { return s + a.spend; }, 0),
-      ads.reduce(function (s, a) { return s + a.link_clicks; }, 0),
-      ads.reduce(function (s, a) { return s + a.lead_form; }, 0),
-      ads.reduce(function (s, a) { return s + a.page_optin; }, 0));
+      ads.reduce(function (s, a) { return s + a.leads; }, 0),
+      ads.reduce(function (s, a) { return s + a.link_clicks; }, 0));
+
+    var daily = dailyAll.filter(function (d) { return d.date >= since && d.date <= until; })
+      .map(function (d) {
+        return Object.assign({}, d, {
+          leads: hyDailyAll ? (hyDailyAll[d.date] || 0) : 0,
+          hyros: !!hyDailyAll
+        });
+      });
 
     return {
       key: key, since: since, until: until,
       days: dayDiff(since, until) + 1,
-      // Matches pull.py: a window reaching back to the pixel repair or earlier carries an
-      // understated page-opt-in half and the built page says so above the creative board.
-      page_optin_understated: !!(CFG.pixel_fix_date && since <= CFG.pixel_fix_date),
-      totals: totals, campaigns: campaigns, daily: [], ads: rankSort(ads)
+      totals: totals, campaigns: campaigns, daily: daily, ads: rankSort(ads)
     };
   }
 
-  /** One noon-Monday-to-noon-Monday cycle, on the same five metrics as every other box. */
   async function weekCycle(campaignIds, opened, closed, now) {
     var apiClose = closed > now ? now : closed;
     var m = await metaInstantRange(opened, apiClose);
-    var leads = m.lead_form + m.page_optin;
-    // The live path only ever repaints the OPEN cycle, which by definition opened after
-    // the 2026-08-27 pixel repair, so no restatement applies here. Completed cycles are
-    // restated at build time from the funnel's own count and are left untouched.
+    var dayIds = (await insights('campaign', ymd(CFG.account_tz, opened),
+                                 ymd(CFG.account_tz, apiClose)))
+      .map(function (r) { return String(r.campaign_id); });
+    var ids = dayIds.length ? dayIds : campaignIds;
+    var hy = await hyrosRange(ids, isoOffset(CFG.week_tz, opened, true),
+                              isoOffset(CFG.week_tz, apiClose, true));
+    var leads = hy ? hy.leads : 0;
     return {
       opened: opened, closed: closed, api_closed: apiClose,
       closing_now: closed > now,
@@ -454,9 +496,6 @@
       link_clicks: m.clicks,
       cost_per_link_click: m.clicks ? r2(m.spend / m.clicks) : null,
       leads: leads,
-      lead_form: m.lead_form,
-      page_optin: m.page_optin,
-      page_optin_restated: false,
       have: !!leads,
       cost_per_lead: leads ? r2(m.spend / leads) : null,
       conv_rate: m.clicks ? r2(leads / m.clicks * 100) : null
@@ -486,27 +525,14 @@
     var tz = CFG.account_tz;
     var today = ymd(tz, now);
 
-    // Only the ACTIVE campaigns matter, and asking Meta to filter turns a paged read
-    // of 220 campaigns into a single page of two. Measured: 3.9s down to under half.
-    say('Listing the live webinar campaigns');
-    var live = (await graphAll('/' + ACT + '/campaigns', {
-      fields: 'id,name,effective_status',
-      effective_status: JSON.stringify(['ACTIVE']),
-      limit: 200
-    })).filter(function (c) {
-      return (c.name || '').toLowerCase().indexOf(CFG.campaign_match) !== -1;
-    });
-    var liveIds = live.map(function (c) { return c.id; });
-    if (!liveIds.length) {
-      // Nothing active: fall back to the unfiltered list, as pull.py does, so a
-      // paused week still reports rather than reading as zero everywhere.
-      var all = (await graphAll('/' + ACT + '/campaigns',
-        { fields: 'id,name,effective_status', limit: 200 }))
-        .filter(function (c) {
-          return (c.name || '').toLowerCase().indexOf(CFG.campaign_match) !== -1;
-        });
-      liveIds = all.slice(0, 2).map(function (c) { return c.id; });
-    }
+    say('Listing webinar campaigns');
+    var camps = (await graphAll('/' + ACT + '/campaigns',
+      { fields: 'id,name,effective_status', limit: 200 }))
+      .filter(function (c) {
+        return (c.name || '').toLowerCase().indexOf(CFG.campaign_match) !== -1;
+      });
+    var live = camps.filter(function (c) { return c.effective_status === 'ACTIVE'; });
+    var liveIds = (live.length ? live : camps.slice(0, 2)).map(function (c) { return c.id; });
 
     // Trailing windows never reach back before the program launched.
     function back(days) {
@@ -515,41 +541,39 @@
     }
     var spans = { '3d': [back(3), today], '7d': [back(7), today], launch: [CFG.launch, today] };
     var widest = spans.launch[0];
-    var wb = weekBounds(now);
 
-    // Everything below is independent of everything else below it, so it all goes at
-    // once and the gate decides how much actually flies. Sequentially this stretch was
-    // about forty seconds; the slowest single branch is the launch window.
-    say('Reading Meta');
-    var got = await Promise.all([
-      metaDaily(widest, today),                                            // 0
-      pullWindow('3d', spans['3d'][0], spans['3d'][1], liveIds, say),      // 1
-      pullWindow('7d', spans['7d'][0], spans['7d'][1], liveIds, say),      // 2
-      pullWindow('launch', spans.launch[0], spans.launch[1], liveIds, say),// 3
-      weekCycle(liveIds, wb.opened, wb.closed, now)                        // 4
-    ]);
-    var dailyAll = got[0];
-    var windows = { '3d': got[1], '7d': got[2], launch: got[3] };
-    var week = got[4];
+    // The daily strip and Hyros-per-day are pulled once over the widest span and
+    // sliced per window: three separate sweeps would be the same data three times,
+    // and Hyros has no day grouping, so each day is its own call.
+    say('Reading the daily strip from Meta');
+    var dailyAll = await metaDaily(widest, today);
 
-    // The day strip, sliced per window from the one widest read. Registrations ride on
-    // the same rows as spend now, so a day and its window can no longer disagree.
-    Object.keys(windows).forEach(function (k) {
-      var w = windows[k];
-      w.daily = dailyAll.filter(function (d) {
-        return d.date >= w.since && d.date <= w.until;
-      });
-    });
+    var dayCount = dayDiff(widest, today) + 1;
+    var hyDailyAll = null;
+    if (dayCount <= 31) {
+      var idsByDay = await metaCampaignDays(widest, today);
+      hyDailyAll = {};
+      for (var i = 0; i < dayCount; i++) {
+        var d = addDays(widest, i);
+        var dayIds = idsByDay[d] || [];
+        if (!dayIds.length) { hyDailyAll[d] = 0; continue; }
+        say('Reading registrations day by day from Hyros (' + (i + 1) + ' of ' + dayCount + ')');
+        var rows = await hyrosCall('facebook_campaign', dayIds, d, d);
+        hyDailyAll[d] = rows.reduce(function (a, r) { return a + parseInt((r && r.leads) || 0, 10); }, 0);
+      }
+    }
 
-    // Creatives need the full ad list, so this is the only read left in sequence.
+    var windows = {};
+    for (var k of ['3d', '7d', 'launch']) {
+      windows[k] = await pullWindow(k, spans[k][0], spans[k][1], liveIds, dailyAll, hyDailyAll, say);
+    }
+
+    say('Resolving creatives');
     var adIds = {};
     Object.keys(windows).forEach(function (k) {
       windows[k].ads.forEach(function (a) { adIds[a.ad_id] = 1; });
     });
-
-    say('Resolving creatives');
     var cr = await creativeMap(Object.keys(adIds));
-
     Object.keys(windows).forEach(function (k) {
       windows[k].ads.forEach(function (a) {
         a.format = (cr[a.ad_id] || {}).format || 'IMAGE';
@@ -557,30 +581,36 @@
       });
     });
 
-    var dayRow = windows[CFG.default_window].daily.filter(function (d) {
-      return d.date === today;
-    })[0];
+    say('Reading today from Hyros');
+    var dayRow = windows[CFG.default_window].daily.filter(function (d) { return d.date === today; })[0];
+    var todayIds = (await insights('campaign', today, today))
+      .map(function (r) { return String(r.campaign_id); });
+    if (!todayIds.length) todayIds = liveIds;
+    var hyToday = await hyrosRange(todayIds, today, today);
     var tSpend = dayRow ? dayRow.spend : 0;
     var tClicks = dayRow ? dayRow.link_clicks : 0;
-    var tForm = dayRow ? dayRow.lead_form : 0;
-    var tPage = dayRow ? dayRow.page_optin : 0;
-    var tLeads = tForm + tPage;
+    var tLeads = hyToday ? hyToday.leads : 0;
     var todayBox = {
       date: today,
       spend: tSpend,
       link_clicks: tClicks,
       cost_per_link_click: tClicks ? r2(tSpend / tClicks) : null,
       leads: tLeads,
-      lead_form: tForm,
-      page_optin: tPage,
       cost_per_lead: tLeads ? r2(tSpend / tLeads) : null,
       conv_rate: tClicks ? r2(tLeads / tClicks * 100) : null,
-      have: !!tLeads          // a zero count reads as "—", exactly as in build.py
+      meta_lead_form: dayRow ? dayRow.meta_lead_form : 0,
+      meta_page_optin: dayRow ? dayRow.meta_page_optin : 0,
+      have: !!tLeads,          // a zero count reads as "—", exactly as in build.py
+      hyros_ok: !!hyToday      // whether Hyros answered at all, which greys the box
     };
+
+    say('Reading the open week');
+    var wb = weekBounds(now);
+    var week = await weekCycle(liveIds, wb.opened, wb.closed, now);
 
     return {
       now: now, today: todayBox, week: week, windows: windows,
-      live_count: live.length
+      live_count: live.length, matched: camps.length
     };
   }
 
@@ -608,26 +638,26 @@
     var vals = blendedValues(b);
     var hero = $('.thero-value', box);
     if (hero) hero.textContent = vals[0];
-    // The line under the hero is the registration count's own arithmetic, not a static
-    // caption. Leaving it at its build-time value would print one total over a different
-    // pair of halves, which is exactly the kind of contradiction this page exists to
-    // avoid, so it is repainted with the figure above it.
-    var heroDef = $('.thero-def', box);
-    if (heroDef && typeof b.lead_form === 'number' && typeof b.page_optin === 'number') {
-      heroDef.textContent = num(b.lead_form) + ' lead form + '
-        + num(b.page_optin) + ' funnel opt-in';
-    }
     var cells = $$('.tgrid .tcell-value', box);
     cells.forEach(function (el, i) { if (vals[i + 1] !== undefined) el.textContent = vals[i + 1]; });
+  }
+
+  function paintTodayMeta(t) {
+    var el = document.getElementById('today-meta');
+    if (!el) return;
+    var f = t.meta_lead_form || 0, p = t.meta_page_optin || 0;
+    el.textContent = num(f + p) + ' (' + num(f) + ' on-Meta lead form, ' + num(p)
+      + ' opt-ins on the funnel page)';
   }
 
   function paintToday(snap) {
     var box = $('#box-today');
     if (!box) return;
     paintBox(box, snap.today);
+    paintTodayMeta(snap.today);
     var flag = $('.today-flag', box);
     if (flag) flag.textContent = 'Today · ' + fmtDay(snap.today.date);
-    box.classList.remove('today-stale');
+    box.classList.toggle('today-stale', !snap.today.hyros_ok);
   }
 
   function paintWeek(snap) {
@@ -645,12 +675,12 @@
       note.innerHTML = w.closing_now
         ? '<span class="tflag">Open</span> ' + w.elapsed_hours + ' of ' + w.total_hours
           + ' hours counted, through ' + fmtDT(CFG.week_tz, w.api_closed) + '. It closes at '
-          + fmtDT(CFG.week_tz, w.closed) + ' and will keep climbing until then. Every figure '
-          + 'is sliced from Meta’s hourly buckets, registrations included, so the noon '
-          + 'boundary is exact.'
+          + fmtDT(CFG.week_tz, w.closed) + ' and will keep climbing until then. Spend and link '
+          + 'clicks are sliced from Meta’s hourly figures so the noon boundary is exact; '
+          + 'registrations are Hyros.'
         : 'A complete cycle: ' + w.total_hours + ' hours, ' + fmtDT(CFG.week_tz, w.opened)
-          + ' to ' + fmtDT(CFG.week_tz, w.closed) + '. Every figure is sliced from Meta’s '
-          + 'hourly buckets, registrations included, so the noon boundary is exact.';
+          + ' to ' + fmtDT(CFG.week_tz, w.closed) + '. Spend and link clicks are sliced from '
+          + 'Meta’s hourly figures so the noon boundary is exact; registrations are Hyros.';
     }
     box.classList.toggle('week-open', !!w.closing_now);
   }
@@ -948,6 +978,7 @@
     if (!veil) return;
     var c = creds();
     $('#key-meta').value = c.meta;
+    $('#key-hyros').value = c.hyros;
     veil.hidden = false;
     $('#key-meta').focus();
     veil.__then = onSaved || null;
@@ -966,40 +997,29 @@
     running = true;
     var started = Date.now();
     ui.busy(true, 'Refreshing');
-    READS.done = 0;
-
-    // The reads run in parallel, so phase labels no longer arrive in a tidy order and
-    // several are in flight at once. A ticking count of completed reads is the honest
-    // progress signal, and it keeps the button from looking hung.
-    var phase = 'Starting';
-    var render = function () {
-      ui.msg(esc(phase) + '… <span class="live-note">' + READS.done
-        + ' reads, straight from Meta in this browser</span>');
-    };
-    var tick = setInterval(render, 400);
-
     try {
-      var snap = await pullSnapshot(function (label) { phase = label; render(); });
-      clearInterval(tick);
+      var snap = await pullSnapshot(function (label) {
+        ui.msg(esc(label) + '… <span class="live-note">reading Meta and Hyros directly '
+          + 'from this browser</span>');
+      });
       paint(snap);
       var secs = Math.round((Date.now() - started) / 1000);
       ui.msg('<b>Live</b> — pulled just now, in ' + secs + ' second'
-        + (secs === 1 ? '' : 's') + ' and ' + READS.done + ' reads, straight from Meta '
-        + 'into this browser. '
+        + (secs === 1 ? '' : 's') + ', straight from Meta and Hyros, into this browser. '
         + 'Two things below are still from the <b>' + esc(window.BUILD_STAMP || 'last')
         + '</b> build and say so rather than being repainted: <b>previous weeks</b>, which '
-        + 'are closed cycles that do not move and whose pre-repair figures come from the '
-        + 'funnel rather than from Meta, and the <b>Method</b> notes, whose '
+        + 'are closed cycles and do not move, and the <b>Method</b> notes, whose '
         + 'reconciliation audits that Python pull rather than these numbers.');
       ui.busy(false, 'Refresh');
     } catch (err) {
-      clearInterval(tick);
       ui.busy(false, 'Refresh');
       ui.msg('Live refresh failed — ' + esc(err.message) + '. The numbers below are '
         + 'unchanged, from the <b>' + esc(window.BUILD_STAMP || 'last') + '</b> build. '
-        + 'A read that fails is not treated as zero registrations, so nothing was '
-        + 'repainted. '
-        + '<a href="#" id="relink">Check the token</a>.', true);
+        + (/Hyros/.test(err.message)
+          ? 'A Hyros read that fails is not treated as zero registrations, so nothing was '
+            + 'repainted. '
+          : '')
+        + '<a href="#" id="relink">Check the keys</a>.', true);
       var relink = $('#relink');
       if (relink) {
         relink.addEventListener('click', function (e) {
@@ -1008,7 +1028,6 @@
         });
       }
     } finally {
-      clearInterval(tick);
       running = false;
     }
   }
@@ -1022,11 +1041,13 @@
     pull: pullSnapshot,
     openKeyDialog: openKeyDialog,
     closeKeyDialog: closeKeyDialog,
-    saveKeys: function (meta) {
+    saveKeys: function (meta, hyros) {
       localStorage.setItem(LS_META, meta.trim());
+      localStorage.setItem(LS_HYROS, hyros.trim());
     },
     clearKeys: function () {
       localStorage.removeItem(LS_META);
+      localStorage.removeItem(LS_HYROS);
     }
   };
 }());

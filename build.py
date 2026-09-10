@@ -291,8 +291,9 @@ def recon_line(r):
         return meta_part
     return (meta_part + f" Registrations are checked the same way: the ad rows sum to "
             f"{n(h['ad_sum'])} against {n(h['campaign_sum'])} at campaign level for the same "
-            f"window, a {h['pct']}% gap. Of those, {n(h['lead_form'])} are on-Meta lead forms "
-            f"and {n(h['page_optin'])} are opt-ins on the funnel page.")
+            f"window, a {h['pct']}% gap. Meta counted {n(h['meta_total'])} over the same "
+            f"period, {n(h['meta_lead_form'])} on-Meta lead forms and "
+            f"{n(h['meta_page_optin'])} opt-ins on the funnel page.")
 
 
 def bar_path(x, y, w, h, r=4):
@@ -417,16 +418,15 @@ def summary_box(flag, title, blurb, cells, note, extra_class="", box_id=""):
 
 
 def blended_cells(leads, cost_per_lead, link_clicks, cost_per_click, spend, conv,
-                  spend_def, have, lead_form=None, page_optin=None):
+                  spend_def, have, meta_form=None, meta_page=None):
     """The six figures, in the order they are argued. Identical for every window.
 
-    The registration cell carries its own arithmetic underneath: the two halves are what
-    the client can look up, so they are printed rather than described.
+    The line under the headline names the source rather than an arithmetic, because
+    Hyros's count is not the sum of Meta's two actions and printing them as though it
+    were would invite exactly the wrong subtraction. Meta's figures appear in the note
+    below, labelled as a cross-check.
     """
-    if lead_form is None:
-        sub = "Lead forms plus funnel opt-ins"
-    else:
-        sub = f"{n(lead_form)} lead form + {n(page_optin)} funnel opt-in"
+    sub = "Hyros, all sources, last click"
     return [
         ("Webinar registrations", n(leads) if have else "—", sub),
         ("Cost per registration", money(cost_per_lead) if cost_per_lead else "—", "Spend ÷ registrations"),
@@ -447,26 +447,22 @@ def today_html(t):
     cells = blended_cells(t.get("leads", 0), t.get("cost_per_lead"),
                           t["link_clicks"], t["cost_per_link_click"], t["spend"],
                           t.get("conv_rate"), "Amount spent today", have,
-                          t.get("lead_form", 0), t.get("page_optin", 0))
+                          t.get("meta_lead_form", 0), t.get("meta_page_optin", 0))
 
-    # The two traps that make a morning reading of this box look wrong, said plainly.
-    # Both were hit on 2026-09-08: the funnel showed 5 against a headline of 1, which was
-    # a total being compared with a half, on a figure Meta had not finished filling in.
-    note = ('Registrations are Meta\'s <b>Lead (form)</b> count plus the opt-ins the funnel '
-            'page records, added together. Both halves are shown above so either can be '
-            'checked against its own source, and every registration figure on this page is '
-            'built the same way, down to the individual creative. Spend and link clicks are '
-            'Meta\'s.'
+    mf, mp = t.get("meta_lead_form", 0), t.get("meta_page_optin", 0)
+    note = ('Registrations come from <b>Hyros</b>, last-click, and every registration figure '
+            'on this page is built the same way, down to the individual creative. Spend and '
+            'link clicks are Meta\'s.'
             '<br><br>'
-            '<b>Reading this before the day closes.</b> Two things make an early figure look '
-            'wrong, and neither is an error. <b>Compare like with like:</b> GoHighLevel\'s '
-            '<b>Opt in v2</b> count lines up with the funnel-opt-in half above, never with the '
-            'total, because lead-form registrants never load the funnel page. And <b>Meta '
-            'backfills:</b> its same-day conversion counts arrive over the following hours, so '
-            'this number is always low while the day is open and keeps climbing after the ads '
-            'that earned it have run. Measured on Sep 7: the hours to 9am read 13 at the time '
-            'and read 16 once Meta caught up. A day only settles after it closes; on the last '
-            'two closed days the funnel counted 9 and 13 against Meta\'s 9 and 11.')
+            f'<b>What the other two systems say for today.</b> Meta reports '
+            f'<b id="today-meta">{n(mf + mp)} ({n(mf)} on-Meta lead form, {n(mp)} opt-ins on '
+            f'the funnel page)</b>; GoHighLevel\'s <b>Opt in v2</b> row counts the funnel '
+            f'half only, from '
+            f'every traffic source rather than from the ads. All three settle at close to the '
+            'same place once a day closes, and disagree most in the morning: Meta\'s same-day '
+            'conversions arrive over the following hours, so its figure is always the last to '
+            'catch up. Hyros is the earliest to be right, which is why it is the one reported '
+            'here.')
 
     return summary_box(f'Today · {fmt_day(t["date"])}',
                        "Webinar registrations",
@@ -495,22 +491,15 @@ def week_html(w):
     cells = blended_cells(w["leads"], w.get("cost_per_lead"), w["link_clicks"],
                           w.get("cost_per_link_click"), w["spend"], w.get("conv_rate"),
                           "Amount spent this week", have,
-                          w.get("lead_form"), w.get("page_optin"))
+                          w.get("meta_lead_form"), w.get("meta_page_optin"))
 
     blurb = (f'PBI\'s webinar week: noon Central on Monday through noon Central the '
              f'following Monday, seven days end to end.')
 
-    # Every figure is sliced from Meta's hourly buckets, registrations included, so the
-    # noon boundary is exact rather than rounded to a whole day.
-    src = ('Every figure is sliced from Meta\'s hourly buckets, registrations included, '
-           'so the noon boundary is exact.')
-    if w.get("page_optin_restated"):
-        a, b = w.get("page_optin_span") or ("", "")
-        src = (f'Spend and link clicks are sliced from Meta\'s hourly buckets so the noon '
-               f'boundary is exact. The funnel-opt-in half is the funnel\'s own count for '
-               f'{fmt_day(a)}–{fmt_day(b)}: Meta\'s pixel was under-firing until it was '
-               f'repaired on {fmt_day(w["pixel_fix_date"])}, so this cycle is stated on the funnel '
-               f'rather than on the pixel.')
+    # Spend and link clicks come off Meta's hourly buckets; Hyros is asked for the same
+    # two instants directly, so both sides of the noon boundary are exact.
+    src = ('Spend and link clicks are sliced from Meta\'s hourly buckets and Hyros is asked '
+           'for the same two instants, so the noon boundary is exact on both sides.')
 
     if w["closing_now"]:
         note = (f'<span class="tflag">Open</span> {w["elapsed_hours"]} of '
@@ -543,26 +532,12 @@ def prev_weeks_html(weeks):
       <tr>
         <td class="name">{e(fmt_dt(w["opened"], w.get("tz_abbrev", "")))}
             <span class="prev-to">to {e(fmt_dt(w["closed"], w.get("tz_abbrev", "")))}</span></td>
-        <td class="num strong">{n(w["leads"])}{'<span class="restated" title="Stated on the funnel&#39;s own opt-in count">·</span>' if w.get("page_optin_restated") else ''}</td>
+        <td class="num strong">{n(w["leads"])}</td>
         <td class="num">{money(w["cost_per_lead"])}</td>
         <td class="num">{n(w["link_clicks"])}</td>
         <td class="num">{money(w["cost_per_link_click"])}</td>
         <td class="num">{money(w["spend"])}</td>
       </tr>""" for w in weeks)
-
-    # A restated cycle has to say so in the table it appears in. Naming the marked rows
-    # once below the table beats a superscript on each: there is one reason, not three.
-    restated = [w for w in weeks if w.get("page_optin_restated")]
-    restated_note = ""
-    if restated:
-        fix = fmt_day(restated[0]["pixel_fix_date"])
-        restated_note = (
-            f'<p class="note note-warn"><b>Cycles marked ·</b> The funnel pixel was '
-            f'under-firing until it was repaired on {fix}, so Meta saw only part of the '
-            f'opt-ins on the funnel page during these weeks. Those cycles are stated on '
-            f'the funnel\'s own <b>Opt in v2</b> count instead of on the pixel, which is '
-            f'why they read higher than Meta alone would report. The lead-form half is '
-            f'Meta\'s throughout and was never affected.</p>')
 
     return f"""
   <section class="prevweeks">
@@ -578,7 +553,6 @@ def prev_weeks_html(weeks):
         <tbody>{rows}</tbody>
       </table>
     </div>
-    {restated_note}
   </section>"""
 
 
@@ -667,24 +641,8 @@ def window_html(key, w, cr, active):
     lead_ads = sum(1 for a in ads if a["leads"])
     zero_spend = money(sum(a["spend"] for a in ads if not a["leads"]))
 
-    # A window that reaches back before the pixel repair still carries the pixel's
-    # undercount on its funnel-opt-in half, and unlike the weekly cycles it cannot be
-    # restated: the funnel's stats have no per-ad breakdown. Say so at the top of the
-    # window rather than letting the creative board quietly under-rank landing-page ads.
-    pre_fix_note = ""
-    if w.get("page_optin_understated"):
-        pre_fix_note = (
-            f'<p class="note note-warn"><b>This window reaches back before '
-            f'{fmt_day(w["pixel_fix_date"])}</b>, '
-            'when the funnel pixel was repaired. Lead-form ads are exact throughout, but ads '
-            'that send traffic to the funnel page are undercounted for the days before the '
-            'repair, so they rank lower here than they actually performed. The weekly cycles '
-            'above are restated on the funnel\'s own count and are not affected. For a clean '
-            'comparison between the two kinds of ad, use <b>Last 7 days</b>.</p>')
-
     return f"""
   <div class="win" id="win-{key}" data-label="{e(w['label'])}"{'' if active else ' hidden'}>
-    {pre_fix_note}
     {blocks}
     {thin_note}
 
@@ -835,7 +793,6 @@ def build(snap):
             "campaign_match": m.get("campaign_match", "webinar"),
             "lead_form_action": m["lead_form_action"],
             "page_optin_action": m["page_optin_action"],
-            "pixel_fix_date": m.get("pixel_fix_date"),
             "account_tz": m.get("timezone", "America/Los_Angeles"),
             "week_tz": m.get("week_tz", "America/Chicago"),
             "launch": m.get("window_start")
@@ -1238,7 +1195,6 @@ section {{ margin-top: 56px; }}
 }}
 /* A measurement caveat, not a styling flourish: it has to read as a caution above the
    creative board rather than as another grey aside below it. */
-.restated {{ color: var(--citron); margin-left: 3px; font-weight: 700; cursor: help; }}
 .note-warn {{
   margin: 0 0 22px; border-left-color: var(--citron);
   background: color-mix(in srgb, var(--citron) 12%, var(--sunk));
@@ -1634,24 +1590,24 @@ td.name {{ min-width: 240px; }}
       <li><b>Five metrics, everywhere.</b> Registrations, cost per registration, link clicks,
           cost per link click, and total spent. Every ranking on this page uses them and
           nothing else, so a video and a still are judged on the same terms.</li>
-      <li><b>One registration number, everywhere, and you can check it.</b> A registration is
-          an <b>on-Meta lead form</b> plus an <b>opt-in on the funnel page</b>, added together.
-          Both halves are printed under every headline figure. The lead-form half is what Meta
-          reports in its own <b>Lead (form)</b> column. The funnel half is what GoHighLevel
-          records on the <b>Opt in v2</b> step of the Weekly Webinar [Facebook] funnel. Those
-          two numbers, on the same dates, are this page's registration count: nothing here is
-          blended, modelled or attributed by a third party.</li>
-      <li><b>Why the two halves are separate.</b> Most registrations now arrive through
-          on-Meta lead forms, and those people never load the funnel page at all. Checking the
-          funnel's opt-in count on its own will therefore always come up short of the total,
-          which is correct rather than a discrepancy: it is one of the two halves.</li>
-      <li><b>The funnel pixel was repaired on 27 August 2026.</b> Before that it fired on a
-          fraction of opt-ins: on 20 August the funnel recorded 57 and the pixel saw 15. Weekly
-          cycles that opened before the repair are therefore stated on the funnel's own count
-          rather than on the pixel, and each says so. Cycles after it are Meta's, which now
-          agrees with the funnel to within about a tenth. Creative-level figures in windows
-          reaching back before the repair still carry the pixel's undercount, because the
-          funnel's stats have no per-ad breakdown to correct them against.</li>
+      <li><b>One registration number, everywhere.</b> Every registration figure on this page,
+          from the headline down to a single creative, is the <b>Hyros</b> count under
+          last-click attribution. It is one measure applied the same way at every level, so
+          nothing on the page contradicts anything else on it.</li>
+      <li><b>Why Hyros rather than Meta.</b> The pixel on the funnel page was under-firing
+          until it was repaired on 27 August 2026, and Meta's series has a step change there
+          that Hyros does not: over 11-27 August Meta recorded 5-51 registrations a day
+          against Hyros's 27-83, while over 1-10 September, with the pixel working, the two
+          run together at 20-91 against 24-96. Hyros both agrees with Meta now and measured
+          the earlier weeks correctly, which makes it the only continuous series across the
+          whole programme and the only one that can compare August with September.</li>
+      <li><b>What the other two systems say.</b> Meta's own count appears under today's box
+          and in the reconciliation notes, split into the two actions it reports: on-Meta
+          <b>Lead (form)</b> submissions and pixel opt-ins on the funnel page. GoHighLevel's
+          <b>Opt in v2</b> row counts the funnel half only, from every traffic source rather
+          than from the ads, so it is never expected to match a total. All three settle close
+          to one another once a day closes and disagree most in the morning, because Meta's
+          same-day conversions arrive over the following hours.</li>
       <li><b>Scope.</b> Every campaign in Meta ad account {account_id} whose name contains
           "webinar", matched by name rather than by a fixed ID list so next week's campaign is
           picked up without editing anything. All {matched} matching campaigns are included
@@ -1659,7 +1615,7 @@ td.name {{ min-width: 240px; }}
           delivering right now, and a campaign paused mid-window keeps the spend and the
           registrations it earned while it ran.</li>
       <li><b>Spend and link clicks are Meta's.</b> Cost per registration pairs Meta's spend
-          with the registration count above, the same way at every level of the page. Link clicks are
+          with Hyros's registrations, the same way at every level of the page. Link clicks are
           the clicks that actually left for the landing page: all-clicks runs about 2.4x
           higher on this account and would flatter both the count and the cost.</li>
       <li><b>Ranking.</b> Registrations first, then cost per registration, then spend. Volume
@@ -1671,8 +1627,7 @@ td.name {{ min-width: 240px; }}
           two-dollar ad cannot weigh as much as a two-hundred-dollar one.</li>
       <li><b>Thin data.</b> Ads under {thin_spend} spent or under {thin_clicks} link clicks are
           flagged. Their cost per registration is one event, not a rate.</li>
-      <li><b>Source.</b> Meta Graph API v21.0, read-only, plus the GoHighLevel funnel stats
-          page for the pre-repair weekly cycles.
+      <li><b>Source.</b> Meta Graph API v21.0 and the Hyros attribution API, both read-only.
           All Meta figures are on the ad account's own clock, America/Los_Angeles. Creatives
           are downloaded and embedded because Meta's image links are signed and expire.
           Nothing on this page is estimated or inferred.</li>
@@ -1709,21 +1664,23 @@ td.name {{ min-width: 240px; }}
   <div class="keybox">
     <h3 id="key-title">Live data keys</h3>
     <p>This page is a static file: it holds no credentials, because the repository that
-       publishes it is public. Enter your own read-only Meta token and Refresh will call
-       Meta <b>directly from this browser</b> instead of waiting for the next scheduled
-       build. The token is stored on this device only, is sent to nobody but Meta, and
-       never reaches the repository or the published page.</p>
+       publishes it is public. Enter your own read-only keys and Refresh will call Meta and
+       Hyros <b>directly from this browser</b> instead of waiting for the next scheduled
+       build. They are stored on this device only, are sent to nobody but Meta and Hyros,
+       and never reach the repository or the published page.</p>
     <label for="key-meta">Meta access token</label>
     <input id="key-meta" type="password" autocomplete="off" spellcheck="false" placeholder="EAA…">
+    <label for="key-hyros">Hyros API key</label>
+    <input id="key-hyros" type="password" autocomplete="off" spellcheck="false" placeholder="Hyros API key">
     <div class="keyrow">
-      <button class="btn-forget" id="key-forget" type="button">Forget this token</button>
+      <button class="btn-forget" id="key-forget" type="button">Forget these keys</button>
       <span class="spacer"></span>
       <button class="btn" id="key-cancel" type="button">Cancel</button>
       <button class="btn btn-primary" id="key-save" type="button">Save and refresh</button>
     </div>
-    <small>The same read-only system-user token with <code>ads_read</code> that the build
-       uses. Registrations come from this one read now, so no second key is needed.
-       Clearing this browser's site data clears it.</small>
+    <small>Meta: the same read-only system-user token with <code>ads_read</code> the build
+       uses. Hyros: Settings → API, scoped to the PBI account, since registrations come from
+       there. Clearing this browser's site data clears both.</small>
   </div>
 </div>
 
@@ -1829,7 +1786,7 @@ async function checkForNewer() {{
       'late, so a published build can be a couple of hours old.<br><br>' +
       'This page ships with no credentials: the repository is public, so a key in the ' +
       'HTML would be a key on the open internet. For a pull that is never stale, press ' +
-      '<b>Turn on live data</b> and enter your own read-only Meta token. It ' +
+      '<b>Turn on live data</b> and enter your own read-only Meta and Hyros keys. They ' +
       'stay in this browser, on this device, and Refresh then calls both APIs directly ' +
       'and repaints the page in seconds.');
 }}
@@ -1865,12 +1822,14 @@ if (liveBtn) {{
 if (keyveil) {{
   document.getElementById('key-save').addEventListener('click', function () {{
     const m = document.getElementById('key-meta').value;
-    if (!m.trim()) {{
-      msg('A read-only Meta token is needed: spend, link clicks and both halves of the '
-          + 'registration count all come from the same Meta read.', true);
+    const h = document.getElementById('key-hyros').value;
+    if (!m.trim() || !h.trim()) {{
+      msg('Both keys are needed: registrations come from Hyros and spend comes from Meta, '
+          + 'and a missing Hyros key would read as zero registrations rather than as an error.',
+          true);
       return;
     }}
-    window.PBILive.saveKeys(m);
+    window.PBILive.saveKeys(m, h);
     const then = keyveil.__then;
     window.PBILive.closeKeyDialog();
     syncLiveBtn();
