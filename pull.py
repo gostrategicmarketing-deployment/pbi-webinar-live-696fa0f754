@@ -98,6 +98,32 @@ PAGE_OPTIN_ACTION = "offsite_conversion.fb_pixel_lead"
 GHL_STATS_URL = ("https://app.pbiflightcrew.com/v2/location/GmBTEcbq9PN9YY99gncv"
                  "/funnels-websites/funnels/jlPVWxKKFvE67r7hNCb0/stats")
 
+# The HEADLINE registrations in today's box, the weekly cycle and the previous weeks are
+# GoHighLevel opt-ins plus Meta's on-Meta instant-form leads (Phil, 2026-09-28). Two
+# halves, each read from the system that actually holds it:
+#
+#   funnel opt-ins   GHL form submissions on the "Weekly Webinar [Facebook]" funnel, its
+#                    Opt in v2 step, which runs two forms (Control and Variant, an A/B
+#                    split). Counted as PEOPLE: a contact who submits twice in one window
+#                    is one registrant.
+#   instant forms    `onsite_conversion.lead_grouped` from Meta. These people never load
+#                    the funnel page, so GHL cannot see them as funnel opt-ins. (GHL does
+#                    receive a synced copy under a "fb-" form id; it is deliberately not
+#                    read, so the lead-form half has exactly one source.)
+#
+# Hyros stays on the page as a labelled cross-check and still ranks the creative, where
+# it reconciles at ad level. The funnel's stats screen has no public API, which is why
+# this reads form submissions instead; see the pbi-ghl-api memory.
+GHL_KEY_FILE = Path("/Users/philglutting/Documents/Claude/Projects/PBI 2/ghl_key.txt")
+GHL_API = "https://services.leadconnectorhq.com"
+GHL_LOCATION = "GmBTEcbq9PN9YY99gncv"
+GHL_WEBINAR_FUNNEL = "jlPVWxKKFvE67r7hNCb0"
+GHL_WEBINAR_FORMS = {
+    "BU61M3IbD1mFFFw2HXe8": "Weekly Webinar [Facebook] Control",
+    "jkt0KlO7oBUI0ZaGyozu": "Weekly Webinar [Facebook] Variant",
+}
+REG_SOURCE = "GHL funnel opt-ins + Meta instant-form leads"
+
 # Hourly runs would otherwise fill data/ with 24 files a day. Two days of history is
 # enough to diff a bad pull against a good one; Meta remains the source of truth.
 KEEP_SNAPSHOTS = 48
@@ -499,6 +525,79 @@ def hyros_today(campaign_ids, day):
     }
 
 
+def ghl_key():
+    key = os.environ.get("GHL_API_KEY", "").strip()
+    if not key and GHL_KEY_FILE.exists():
+        key = GHL_KEY_FILE.read_text().strip()
+    return key
+
+
+_GHL_SUBS = None     # [] read and empty; False read failed; None not read yet
+
+
+def ghl_submissions():
+    """Every opt-in on the webinar funnel since launch, as [(instant, person)], read once.
+
+    None when there is no key or any page fails: half a count is worse than none, and a
+    failed read must never print as zero registrations. Only the timestamp and an opaque
+    contact id are kept; names, emails and phones never leave this function.
+
+    `startAt`/`endAt` are whole dates on GHL's side, so the range is padded a day each way
+    and every window is cut on the submission's own UTC timestamp instead.
+    """
+    global _GHL_SUBS
+    if _GHL_SUBS is not None:
+        return _GHL_SUBS if _GHL_SUBS is not False else None
+    key = ghl_key()
+    if not key:
+        print("  ghl: no key (GHL_API_KEY or the PBI key file); headline registrations unavailable")
+        _GHL_SUBS = False
+        return None
+    since = (date.fromisoformat(WINDOW_START) - timedelta(days=1)).isoformat()
+    until = (datetime.now(ACCOUNT_TZ).date() + timedelta(days=2)).isoformat()
+    out = []
+    for form in GHL_WEBINAR_FORMS:
+        page = 1
+        while True:
+            url = f"{GHL_API}/forms/submissions?" + urllib.parse.urlencode({
+                "locationId": GHL_LOCATION, "formId": form, "startAt": since,
+                "endAt": until, "limit": 100, "page": page})
+            p = subprocess.run(
+                ["curl", "-sS", "--max-time", "60", "--retry", "3", "--retry-all-errors",
+                 "-H", f"Authorization: Bearer {key}", "-H", "Version: 2021-07-28",
+                 "-w", "\n%{http_code}", url], capture_output=True, text=True)
+            body, _, code = p.stdout.rpartition("\n")
+            try:
+                d = json.loads(body) if code.strip() == "200" else None
+            except ValueError:
+                d = None
+            if not d or not isinstance(d.get("submissions"), list):
+                print(f"  ghl: read failed (form {form}, page {page}, HTTP {code.strip()}); "
+                      "headline registrations unavailable")
+                _GHL_SUBS = False
+                return None
+            for sub in d["submissions"]:
+                ev = (sub.get("others") or {}).get("funneEventData") or {}  # sic: GHL's spelling
+                if ev.get("funnel_id") not in (None, GHL_WEBINAR_FUNNEL) or not sub.get("createdAt"):
+                    continue
+                at = datetime.fromisoformat(sub["createdAt"].replace("Z", "+00:00"))
+                out.append((at, sub.get("contactId") or sub.get("id")))
+            if not (d.get("meta") or {}).get("nextPage"):
+                break
+            page += 1
+    print(f"  ghl: {len(out)} webinar-funnel submissions since {WINDOW_START}")
+    _GHL_SUBS = out
+    return out
+
+
+def ghl_optins(opened, closed):
+    """People who opted in on the webinar funnel in [opened, closed), or None if unread."""
+    subs = ghl_submissions()
+    if subs is None:
+        return None
+    return len({who for at, who in subs if opened <= at < closed})
+
+
 def creatives(ad_ids):
     """Creative image, format, and the live post link, so every ad opens on Facebook.
 
@@ -713,15 +812,32 @@ WEEK_TZ = ZoneInfo("America/Chicago")
 WEEK_HOUR = 12
 PREV_WEEKS_MAX = 6
 
+# One-off early openings: {the normal Monday-noon boundary: when it actually fell}.
+#
+# 2026-09-28: Phil started the ads for the 10-05 webinar that morning rather than at noon,
+# so that cycle opens at 3:00 AM CDT (the 1:00 AM Los Angeles hour the new ad sets first
+# delivered in; they were set to start 1:44 AM PDT) and runs to noon on 10-05. The cycle
+# before it closes at the same instant, so no hour is counted twice or dropped. From
+# 10-05 noon it is back to plain noon-to-noon. Keep every entry on the top of an hour:
+# Meta's hourly buckets cannot be cut any finer. live.js reads this map via LIVE_CFG.
+WEEK_EARLY_OPENS = {
+    datetime(2026, 9, 28, 12, tzinfo=WEEK_TZ): datetime(2026, 9, 28, 3, tzinfo=WEEK_TZ),
+}
+
+
+def boundary(noon):
+    """When the cycle nominally opening at this Monday noon actually opened."""
+    return WEEK_EARLY_OPENS.get(noon, noon)
+
 
 def week_bounds(now):
-    """The cycle currently open: the noon-Monday boundary just passed, and the next one."""
+    """The cycle currently open: the boundary just passed, and the next one."""
     now_c = now.astimezone(WEEK_TZ)
     monday = now_c.date() - timedelta(days=now_c.weekday())
-    opened = datetime.combine(monday, time(WEEK_HOUR), WEEK_TZ)
-    if now_c < opened:          # before noon on a Monday the open cycle is the earlier one
-        opened -= timedelta(days=7)
-    return opened, opened + timedelta(days=7)
+    noon = datetime.combine(monday, time(WEEK_HOUR), WEEK_TZ)
+    if now_c < boundary(noon):  # before a Monday's boundary the open cycle is the earlier one
+        noon -= timedelta(days=7)
+    return boundary(noon), boundary(noon + timedelta(days=7))
 
 
 def meta_instant_range(opened, closed):
@@ -785,11 +901,18 @@ def week_cycle(opened, closed, now, label):
                                   api_close.astimezone(ACCOUNT_TZ).date().isoformat())
     hy = hyros_range(ids, opened.isoformat(timespec="seconds"),
                      api_close.isoformat(timespec="seconds")) if ids else None
-    leads = hy["leads"] if hy else 0
+
+    # The headline is GHL's funnel opt-ins plus Meta's instant forms over the same two
+    # instants. A GHL read that failed leaves `leads` as None, never 0.
+    ghl = ghl_optins(opened, api_close)
+    leads = ghl + form if ghl is not None else None
 
     return {
         "meta_lead_form": form,
         "meta_page_optin": page,
+        "ghl_optins": ghl,
+        "hyros_leads": hy["leads"] if hy else None,
+        "early_open": opened != opened.replace(hour=WEEK_HOUR, minute=0),
         "label": label,
         "opened": opened.isoformat(timespec="minutes"),
         "closed": closed.isoformat(timespec="minutes"),
@@ -811,7 +934,7 @@ def week_cycle(opened, closed, now, label):
         "cost_per_link_click": round(spend / clicks, 2) if clicks else None,
         "leads": leads,
         "cost_per_lead": round(spend / leads, 2) if leads else None,
-        "conv_rate": round(leads / clicks * 100, 2) if clicks else None,
+        "conv_rate": round(leads / clicks * 100, 2) if clicks and leads is not None else None,
     }
 
 
@@ -819,12 +942,14 @@ def previous_weeks(opened, now):
     """Completed cycles before the open one, newest first, back to the program launch."""
     out = []
     launch = date.fromisoformat(WINDOW_START)
-    cur = opened
+    # Walk the nominal Monday noons, then map each through boundary(), so an early
+    # opening shortens the cycle before it instead of shifting every later one.
+    cur = opened.replace(hour=WEEK_HOUR, minute=0)
     for _ in range(PREV_WEEKS_MAX):
         cur = cur - timedelta(days=7)
-        if (cur + timedelta(days=7)).astimezone(ACCOUNT_TZ).date() <= launch:
+        if boundary(cur + timedelta(days=7)).astimezone(ACCOUNT_TZ).date() <= launch:
             break                       # cycle closed before the program existed
-        w = week_cycle(cur, cur + timedelta(days=7), now, "Previous week")
+        w = week_cycle(boundary(cur), boundary(cur + timedelta(days=7)), now, "Previous week")
         if w["spend"] or w["leads"]:
             out.append(w)
     return out
@@ -908,21 +1033,26 @@ def main():
     clicks = day_row["link_clicks"] if day_row else 0
     form = day_row["meta_lead_form"] if day_row else 0
     page = day_row["meta_page_optin"] if day_row else 0
-    leads = day_row["leads"] if day_row else 0
-    print(f"  today: {leads} hyros registrations "
-          f"(meta {form + page} = {form} form + {page} funnel), "
-          f"${spend:,.2f}, {clicks} link clicks")
+    hy_leads = day_row["leads"] if day_row else 0
+    # Today on the account's own clock, the same day Meta's lead-form count covers.
+    day_open = datetime.combine(today, time(0), ACCOUNT_TZ)
+    ghl = ghl_optins(day_open, day_open + timedelta(days=1))
+    leads = ghl + form if ghl is not None else None
+    print(f"  today: {leads} registrations = {ghl} GHL funnel opt-ins + {form} instant forms "
+          f"(hyros {hy_leads}, meta pixel {page}), ${spend:,.2f}, {clicks} link clicks")
     todays = {
         "date": today_iso,
         "spend": spend,
         "link_clicks": clicks,
         "cost_per_link_click": round(spend / clicks, 2) if clicks else None,
         "leads": leads,
+        "ghl_optins": ghl,
+        "hyros_leads": hy_leads,
         "meta_lead_form": form,
         "meta_page_optin": page,
         "cost_per_lead": round(spend / leads, 2) if leads else None,
-        "conv_rate": round(leads / clicks * 100, 2) if clicks else None,
-        "source": "Hyros REST /attribution, last click",
+        "conv_rate": round(leads / clicks * 100, 2) if clicks and leads is not None else None,
+        "source": REG_SOURCE,
         "fetched_at": datetime.now(ACCOUNT_TZ).isoformat(timespec="seconds"),
     }
 
@@ -959,6 +1089,12 @@ def main():
             "lead_form_action": LEAD_FORM_ACTION,
             "page_optin_action": PAGE_OPTIN_ACTION,
             "ghl_stats_url": GHL_STATS_URL,
+            "ghl_location": GHL_LOCATION,
+            "ghl_funnel": GHL_WEBINAR_FUNNEL,
+            "ghl_forms": list(GHL_WEBINAR_FORMS),
+            "week_early_opens": {k.isoformat(timespec="minutes"): v.isoformat(timespec="minutes")
+                                 for k, v in WEEK_EARLY_OPENS.items()},
+            "headline_source": REG_SOURCE,
             "lead_source": "Hyros REST /attribution, last click",
             "source": "Meta Graph API v21.0 (ads_read)",
             "pulled_at": now.isoformat(timespec="seconds"),

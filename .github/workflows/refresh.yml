@@ -3,9 +3,9 @@ name: refresh
 # Pull Meta + Hyros, rebuild the dashboard, deploy it to GitHub Pages, then start the next
 # run thirty minutes on.
 #
-# The two API credentials live only in Actions Secrets (FB_TOKEN, HYROS_API_KEY); they
-# reach the scripts as environment variables and never touch the repo or the published
-# page. Both are read-only keys.
+# The three API credentials live only in Actions Secrets (FB_TOKEN, HYROS_API_KEY,
+# GHL_API_KEY); they reach the scripts as environment variables and never touch the repo
+# or the published page. All are read-only keys.
 
 on:
   # THE SCHEDULE IS THE CHAIN AT THE FOOT OF THIS JOB, NOT THIS CRON.
@@ -90,10 +90,11 @@ jobs:
           restore-keys: |
             creative-cache-
 
-      - name: Pull Meta + Hyros
+      - name: Pull Meta + Hyros + GoHighLevel
         env:
           FB_TOKEN: ${{ secrets.FB_TOKEN }}
           HYROS_API_KEY: ${{ secrets.HYROS_API_KEY }}
+          GHL_API_KEY: ${{ secrets.GHL_API_KEY }}
         run: python pull.py
 
       - name: Build the page

@@ -23,11 +23,42 @@ Or double-click **`refresh.command`** in Finder.
    registrations reported in the hero.
 4. **Day by day**, **By campaign**, **Every ad**, **Method**, **Brand palette**.
 
-## One registration number, everywhere
+## Headline registrations: GoHighLevel + Meta instant forms (2026-09-28)
 
-Every registration figure on the page, from the hero down to a single creative, is the
-**Hyros** count under last-click attribution. One measure, applied the same way at every
-level, so nothing on the page contradicts anything else on it.
+Today's box, the open weekly cycle and the previous-weeks table count registrations as
+two halves added together, each read from the system that holds it (Phil, 2026-09-28):
+
+| Half | Source | Detail |
+|---|---|---|
+| Funnel opt-ins | GoHighLevel `/forms/submissions` | "Weekly Webinar [Facebook]" funnel `jlPVWxKKFvE67r7hNCb0`, Opt in v2 step, its two A/B forms: Control `BU61M3IbD1mFFFw2HXe8` + Variant `jkt0KlO7oBUI0ZaGyozu`. Each person (contactId) once per window. |
+| Instant forms | Meta `onsite_conversion.lead_grouped` | on-Meta lead form; these people never load the funnel page |
+
+The line under each headline prints the two halves. GHL's synced copy of the Meta lead
+forms (form id `fb-<location>`) is deliberately not read, so the lead-form half has one
+source. A GHL read that fails shows "—", never 0. Checked against the funnel's own stats
+screen: 2026-08-20 reads 56 here against 57 there.
+
+If Erin adds a new form to that funnel step, add its id to `GHL_WEBINAR_FORMS` in
+`pull.py`; `live.js` takes the list from `LIVE_CFG`.
+
+**Hyros still ranks the creative** (Best images/videos, By campaign, Every ad, Day by day)
+because it credits registrations per ad and reconciles at ad level. Its totals will not
+equal the headline, and the Method notes say so. Hyros and Meta's pixel opt-ins appear
+under today's box as cross-checks.
+
+### One-off early week openings
+
+`WEEK_EARLY_OPENS` in `pull.py` maps a nominal Monday-noon boundary to the instant it
+actually fell. 2026-09-28: the ads for the 10-05 webinar started that morning (ad sets
+set to 1:44 AM PDT), so that cycle runs **3:00 AM CDT Sep 28 to noon CDT Oct 5** and the
+cycle before it closes at 3:00 AM. From Oct 5 noon it is plain noon-to-noon again.
+Entries must sit on the top of an hour (Meta's hourly buckets). `live.js` reads the same
+map from `LIVE_CFG`.
+
+## Creative rankings: Hyros
+
+Every registration figure below the weekly boxes, from the window tables down to a single
+creative, is the **Hyros** count under last-click attribution.
 
 Meta's own count rides alongside as a labelled cross-check, split into the two actions it
 reports, and is never the headline:
@@ -294,32 +325,83 @@ which covers `queued`, `pending`, `waiting` and `requested` alike.
 ### Watchdog
 
 The chain has one dependency: every run must successfully start the next. Most of the time
-it does, and a run that *fails* still hands on. But a job that hits its 60-minute timeout,
-a cancelled run, or an Actions outage will break the link, and GitHub's cron is not a
-backstop worth having. Left alone, the page would then quietly stop updating.
+it does, and a run that *fails* still hands on. But a job that hits its timeout, a cancelled
+run, or an Actions outage will break the link, and GitHub's cron is not a backstop worth
+having. Left alone, the page would then quietly stop updating.
 
-`chain-watchdog.sh` is what notices. Every ten minutes it asks whether any `refresh` run is
-in flight; if none is, and the newest run is more than 40 minutes old, it dispatches one.
-While the chain is healthy it does nothing at all, so it cannot double the cadence or fight
-the workflow's own concurrency group. It uses the Mac's existing `gh` login, so there is no
-new credential anywhere.
+`chain-watchdog.sh` is what notices. Every ten minutes it reads the **published page's own
+`last-modified` header**; if the page has not changed in 75 minutes it cancels anything
+wedged and dispatches a fresh run. While the page is current it does nothing at all, so it
+cannot double the cadence or fight the workflow's own concurrency group.
 
 ```bash
 "./chain-watchdog.sh" --status   # report what it sees, change nothing
 ```
 
-Install (one time):
+#### It watches the page, not the run list (2026-09-13)
+
+The first version asked only whether a `refresh` run existed, on the reasoning that a run in
+flight *is* the chain: either working or sitting in its 28-minute hold. That holds right up
+until GitHub accepts a run and then never gives it a runner.
+
+Measured **2026-09-13**: the 04:23:55Z link was dispatched on time and its job did not start
+until **11:52:54Z**, seven and a half hours later, spanning a critical GitHub incident
+(09:16Z to 10:44Z, Actions and Pages degraded). The run reported `in_progress` throughout,
+so the old test saw a healthy chain and stayed silent while the page sat frozen on its
+04:24Z build. The 100 deployments before it, 09-11 05:25Z to 09-13 04:24Z, had **no gap over
+45 minutes**: the chain itself was never the problem.
+
+So the health signal is now the one the reader actually experiences. Not the deployments
+API: a `github-pages` deployment only reports `success` when the *job* ends, and this job
+deliberately holds for 28 minutes after deploying, so success lands half an hour late. Its
+`created_at` is worse, stamped when the run is queued, which during that outage read 04:24Z
+for a page that did not change until 11:54Z.
+
+A run in flight past **75 minutes** is treated as wedged rather than as proof of life. It is
+cancelled before the new link is dispatched, because the workflow's concurrency group does
+not cancel in progress and would otherwise hold the replacement shut behind it. Cancelling
+also stops that run chaining onward, which is why the dispatch is not conditional.
+
+#### It cannot live on the Desktop (2026-09-13)
+
+launchd **cannot execute anything under `~/Desktop`**: the path is TCC-protected, and the
+agent is not. Every invocation from install on 2026-08-27 until 2026-09-13 died before
+reaching the script:
+
+```
+/bin/bash: .../chain-watchdog.sh: Operation not permitted
+```
+
+**2,423 consecutive failures, one per ten minutes for 16 days, every line identical.** The
+backstop built for exactly this outage had never run once. (Same trap as the Fall Summit
+dashboard's launchd job.)
+
+So the agent runs an installed copy outside the protected path. The repo copy stays
+canonical; after editing it, reinstall.
+
+Install, or reinstall after an edit:
 
 ```bash
-cp "com.philglutting.pbi-webinar-chain.plist" ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.philglutting.pbi-webinar-chain.plist
+cp "chain-watchdog.sh" ~/Library/Application\ Support/PBIWebinarChain/ && cp "com.philglutting.pbi-webinar-chain.plist" ~/Library/LaunchAgents/ && launchctl unload ~/Library/LaunchAgents/com.philglutting.pbi-webinar-chain.plist 2>/dev/null; launchctl load ~/Library/LaunchAgents/com.philglutting.pbi-webinar-chain.plist
+```
+
+Check it is alive. The middle column is the last exit status, and it must be `0`; **`126` is
+the TCC failure above**, which is silent everywhere else:
+
+```bash
+launchctl list | grep pbi
 ```
 
 It logs to `~/Library/Logs/pbi-webinar-chain.log`, and writes there only when it actually
-restarts something, so a silent log is the healthy state.
+restarts something, so a silent log is the healthy state. That is also what hid the failure
+for 16 days: the log was not silent, nobody was reading it, and nothing else reported. Exit
+status is the thing to check.
 
 This is insurance, not the schedule. It only runs while the Mac is awake, which is why it
 is the second line and the chain is the first: `launchd` runs one missed interval on wake,
-so a lid closed overnight costs at most one check.
+so a lid closed overnight costs at most one check. Nothing local can conjure a runner out of
+GitHub, so an outage like 09-13 still freezes the page; the watchdog shortens it rather than
+preventing it.
 
 On-demand from any device: the workflow's **Run workflow** button on the repo's Actions
 tab (or the GitHub mobile app). `refresh.command` on the Mac now does a local pull + build
@@ -366,6 +448,7 @@ Both read-only. Local runs read the files; cloud runs read the repo's Actions Se
 |---|---|---|---|---|
 | Meta | `PBI 2/fb_token.txt` or `$FB_TOKEN` | secret `FB_TOKEN` | `localStorage.pbi_meta_token` | System user token, does not expire, `ads_read` |
 | Hyros | `PBI 2/hyros_key.txt` or `$HYROS_API_KEY` | secret `HYROS_API_KEY` | `localStorage.pbi_hyros_key` | PBI-scoped; mode `600` |
+| GoHighLevel | `PBI 2/ghl_key.txt` or `$GHL_API_KEY` | secret `GHL_API_KEY` (set 2026-09-28) | `localStorage.pbi_ghl_key` (optional) | Private Integration Token, location `GmBTEcbq9PN9YY99gncv`; without it in the browser, a live refresh leaves today and the week at build-time values |
 
 The browser column is per device and per reader, entered through **Turn on live data** and
 cleared by **Forget these keys** or by clearing site data. They are read by `live.js` and

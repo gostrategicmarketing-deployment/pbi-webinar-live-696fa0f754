@@ -417,16 +417,23 @@ def summary_box(flag, title, blurb, cells, note, extra_class="", box_id=""):
   </section>"""
 
 
+def reg_sub(ghl, form):
+    """The line under a headline registration count: its own arithmetic, so the client
+    can check each half against the system that holds it (live.js writes the same)."""
+    if ghl is None:
+        return "GoHighLevel could not be read, so no count is shown"
+    return f"{n(ghl)} funnel opt-ins (GoHighLevel) + {n(form or 0)} Meta instant forms"
+
+
 def blended_cells(leads, cost_per_lead, link_clicks, cost_per_click, spend, conv,
-                  spend_def, have, meta_form=None, meta_page=None):
+                  spend_def, have, meta_form=None, meta_page=None, ghl=None):
     """The six figures, in the order they are argued. Identical for every window.
 
-    The line under the headline names the source rather than an arithmetic, because
-    Hyros's count is not the sum of Meta's two actions and printing them as though it
-    were would invite exactly the wrong subtraction. Meta's figures appear in the note
-    below, labelled as a cross-check.
+    Since 2026-09-28 the headline is GoHighLevel's funnel opt-ins plus Meta's instant
+    forms, and the line under it prints those two halves: a real sum, so the client can
+    check each half where it lives.
     """
-    sub = "Hyros, all sources, last click"
+    sub = reg_sub(ghl, meta_form)
     return [
         ("Webinar registrations", n(leads) if have else "—", sub),
         ("Cost per registration", money(cost_per_lead) if cost_per_lead else "—", "Spend ÷ registrations"),
@@ -442,27 +449,27 @@ def today_html(t):
     showing, and set apart because it is the figure the day is steered on."""
     if not t:
         return ""
-    have = bool(t.get("leads"))
+    have = t.get("leads") is not None
 
-    cells = blended_cells(t.get("leads", 0), t.get("cost_per_lead"),
+    cells = blended_cells(t.get("leads"), t.get("cost_per_lead"),
                           t["link_clicks"], t["cost_per_link_click"], t["spend"],
                           t.get("conv_rate"), "Amount spent today", have,
-                          t.get("meta_lead_form", 0), t.get("meta_page_optin", 0))
+                          t.get("meta_lead_form", 0), t.get("meta_page_optin", 0),
+                          t.get("ghl_optins"))
 
-    mf, mp = t.get("meta_lead_form", 0), t.get("meta_page_optin", 0)
-    note = ('Registrations come from <b>Hyros</b>, last-click, and every registration figure '
-            'on this page is built the same way, down to the individual creative. Spend and '
-            'link clicks are Meta\'s.'
+    mp, hy = t.get("meta_page_optin", 0), t.get("hyros_leads")
+    note = ('Registrations are two halves added together, each counted where it lives: '
+            'people who opted in on the webinar funnel page, read straight from '
+            '<b>GoHighLevel</b> (Control and Variant forms, each person once), plus people '
+            'who registered on Meta\'s <b>instant form</b> without ever leaving Facebook, '
+            'read from Meta. Spend and link clicks are Meta\'s. The day runs on the ad '
+            'account\'s own clock, Pacific time.'
             '<br><br>'
-            f'<b>What the other two systems say for today.</b> Meta reports '
-            f'<b id="today-meta">{n(mf + mp)} ({n(mf)} on-Meta lead form, {n(mp)} opt-ins on '
-            f'the funnel page)</b>; GoHighLevel\'s <b>Opt in v2</b> row counts the funnel '
-            f'half only, from '
-            f'every traffic source rather than from the ads. All three settle at close to the '
-            'same place once a day closes, and disagree most in the morning: Meta\'s same-day '
-            'conversions arrive over the following hours, so its figure is always the last to '
-            'catch up. Hyros is the earliest to be right, which is why it is the one reported '
-            'here.')
+            f'<b>Cross-checks for today.</b> <span id="today-meta">Hyros counts '
+            f'{"—" if hy is None else n(hy)}; Meta\'s pixel counts {n(mp)} funnel opt-ins.'
+            '</span> Neither is the headline. Meta\'s pixel conversions arrive over the '
+            'following hours, so it reads low early in the day. The creative rankings below '
+            'still use Hyros, which credits each registration to the ad that drove it.')
 
     return summary_box(f'Today · {fmt_day(t["date"])}',
                        "Webinar registrations",
@@ -485,21 +492,30 @@ def week_html(w):
     """The noon-Central Monday cycle, in the same format as today."""
     if not w:
         return ""
-    have = bool(w.get("leads"))
+    have = w.get("leads") is not None
     tz = w.get("tz_abbrev", "")
     span = f'{fmt_dt(w["opened"], tz)} – {fmt_dt(w["closed"], tz)}'
     cells = blended_cells(w["leads"], w.get("cost_per_lead"), w["link_clicks"],
                           w.get("cost_per_link_click"), w["spend"], w.get("conv_rate"),
                           "Amount spent this week", have,
-                          w.get("meta_lead_form"), w.get("meta_page_optin"))
+                          w.get("meta_lead_form"), w.get("meta_page_optin"),
+                          w.get("ghl_optins"))
 
-    blurb = (f'PBI\'s webinar week: noon Central on Monday through noon Central the '
-             f'following Monday, seven days end to end.')
+    if w.get("early_open"):
+        blurb = (f'Registrations for the upcoming webinar. This cycle opened early, at '
+                 f'{fmt_dt(w["opened"], tz)}, when the ads for this webinar started, and '
+                 f'closes at {fmt_dt(w["closed"], tz)}. After that it is back to the usual '
+                 f'week: noon Central Monday to noon Central the following Monday.')
+    else:
+        blurb = ('Registrations for the upcoming webinar. PBI\'s webinar week runs noon '
+                 'Central on Monday through noon Central the following Monday, seven days '
+                 'end to end.')
 
-    # Spend and link clicks come off Meta's hourly buckets; Hyros is asked for the same
-    # two instants directly, so both sides of the noon boundary are exact.
-    src = ('Spend and link clicks are sliced from Meta\'s hourly buckets and Hyros is asked '
-           'for the same two instants, so the noon boundary is exact on both sides.')
+    # Spend, link clicks and instant forms come off Meta's hourly buckets; GoHighLevel's
+    # opt-ins are cut on their own timestamps, so both sides of the boundary are exact.
+    src = ('Spend, link clicks and instant forms are sliced from Meta\'s hourly buckets and '
+           'GoHighLevel\'s opt-ins are cut on their own timestamps, so the boundary is exact '
+           'on both sides.')
 
     if w["closing_now"]:
         note = (f'<span class="tflag">Open</span> {w["elapsed_hours"]} of '
@@ -532,7 +548,7 @@ def prev_weeks_html(weeks):
       <tr>
         <td class="name">{e(fmt_dt(w["opened"], w.get("tz_abbrev", "")))}
             <span class="prev-to">to {e(fmt_dt(w["closed"], w.get("tz_abbrev", "")))}</span></td>
-        <td class="num strong">{n(w["leads"])}</td>
+        <td class="num strong">{"—" if w["leads"] is None else n(w["leads"])}</td>
         <td class="num">{money(w["cost_per_lead"])}</td>
         <td class="num">{n(w["link_clicks"])}</td>
         <td class="num">{money(w["cost_per_link_click"])}</td>
@@ -543,7 +559,9 @@ def prev_weeks_html(weeks):
   <section class="prevweeks">
     <h3>Previous weeks</h3>
     <p class="prev-sub">Each completed noon-Central Monday cycle, newest first, on the same
-       five figures as the box above.</p>
+       five figures as the box above: registrations are GoHighLevel funnel opt-ins plus Meta
+       instant forms. A cycle cut short by an early start to the next one shows its real
+       closing time.</p>
     <div class="tablewrap">
       <table>
         <thead><tr>
@@ -802,6 +820,10 @@ def build(snap):
             "thin_spend": THIN_SPEND,
             "thin_clicks": THIN_LINK_CLICKS,
             "featured_n": FEATURED,
+            "ghl_location": m.get("ghl_location"),
+            "ghl_funnel": m.get("ghl_funnel"),
+            "ghl_forms": m.get("ghl_forms", []),
+            "week_early_opens": m.get("week_early_opens", {}),
         }, separators=(",", ":")),
         default=default,
         build_stamp=e(fmt_stamp(m["pulled_at"], m.get("timezone_abbrev", ""))),
@@ -1590,24 +1612,25 @@ td.name {{ min-width: 240px; }}
       <li><b>Five metrics, everywhere.</b> Registrations, cost per registration, link clicks,
           cost per link click, and total spent. Every ranking on this page uses them and
           nothing else, so a video and a still are judged on the same terms.</li>
-      <li><b>One registration number, everywhere.</b> Every registration figure on this page,
-          from the headline down to a single creative, is the <b>Hyros</b> count under
-          last-click attribution. It is one measure applied the same way at every level, so
-          nothing on the page contradicts anything else on it.</li>
-      <li><b>Why Hyros rather than Meta.</b> The pixel on the funnel page was under-firing
+      <li><b>The headline registrations</b> in today's box, the weekly cycle and the previous
+          weeks are two halves added together: opt-ins on the webinar funnel page, read
+          straight from <b>GoHighLevel</b> (Control and Variant forms, each person counted
+          once), plus Meta <b>instant-form</b> leads, whose registrants never reach the
+          funnel page. Each half is printed under the total.</li>
+      <li><b>Creative rankings and the tables below use Hyros</b>, last click, because Hyros
+          credits each registration to the ad that drove it and reconciles at ad level. Its
+          totals will not match the headline exactly; the headline is the registration
+          count.</li>
+      <li><b>Why Hyros rather than Meta for the creative.</b> The pixel on the funnel page was under-firing
           until it was repaired on 27 August 2026, and Meta's series has a step change there
           that Hyros does not: over 11-27 August Meta recorded 5-51 registrations a day
           against Hyros's 27-83, while over 1-10 September, with the pixel working, the two
           run together at 20-91 against 24-96. Hyros both agrees with Meta now and measured
           the earlier weeks correctly, which makes it the only continuous series across the
           whole programme and the only one that can compare August with September.</li>
-      <li><b>What the other two systems say.</b> Meta's own count appears under today's box
-          and in the reconciliation notes, split into the two actions it reports: on-Meta
-          <b>Lead (form)</b> submissions and pixel opt-ins on the funnel page. GoHighLevel's
-          <b>Opt in v2</b> row counts the funnel half only, from every traffic source rather
-          than from the ads, so it is never expected to match a total. All three settle close
-          to one another once a day closes and disagree most in the morning, because Meta's
-          same-day conversions arrive over the following hours.</li>
+      <li><b>Cross-checks.</b> Hyros's count and Meta's pixel opt-ins appear under today's
+          box. Meta's same-day pixel conversions arrive over the following hours, so it reads
+          low in the morning.</li>
       <li><b>Scope.</b> Every campaign in Meta ad account {account_id} whose name contains
           "webinar", matched by name rather than by a fixed ID list so next week's campaign is
           picked up without editing anything. All {matched} matching campaigns are included
@@ -1615,7 +1638,7 @@ td.name {{ min-width: 240px; }}
           delivering right now, and a campaign paused mid-window keeps the spend and the
           registrations it earned while it ran.</li>
       <li><b>Spend and link clicks are Meta's.</b> Cost per registration pairs Meta's spend
-          with Hyros's registrations, the same way at every level of the page. Link clicks are
+          with the registrations shown beside it. Link clicks are
           the clicks that actually left for the landing page: all-clicks runs about 2.4x
           higher on this account and would flatter both the count and the cost.</li>
       <li><b>Ranking.</b> Registrations first, then cost per registration, then spend. Volume
@@ -1627,7 +1650,8 @@ td.name {{ min-width: 240px; }}
           two-dollar ad cannot weigh as much as a two-hundred-dollar one.</li>
       <li><b>Thin data.</b> Ads under {thin_spend} spent or under {thin_clicks} link clicks are
           flagged. Their cost per registration is one event, not a rate.</li>
-      <li><b>Source.</b> Meta Graph API v21.0 and the Hyros attribution API, both read-only.
+      <li><b>Source.</b> Meta Graph API v21.0, GoHighLevel form submissions and the Hyros
+          attribution API, all read-only.
           All Meta figures are on the ad account's own clock, America/Los_Angeles. Creatives
           are downloaded and embedded because Meta's image links are signed and expire.
           Nothing on this page is estimated or inferred.</li>
@@ -1666,12 +1690,14 @@ td.name {{ min-width: 240px; }}
     <p>This page is a static file: it holds no credentials, because the repository that
        publishes it is public. Enter your own read-only keys and Refresh will call Meta and
        Hyros <b>directly from this browser</b> instead of waiting for the next scheduled
-       build. They are stored on this device only, are sent to nobody but Meta and Hyros,
+       build. They are stored on this device only, are sent to nobody but Meta, Hyros and GoHighLevel,
        and never reach the repository or the published page.</p>
     <label for="key-meta">Meta access token</label>
     <input id="key-meta" type="password" autocomplete="off" spellcheck="false" placeholder="EAA…">
     <label for="key-hyros">Hyros API key</label>
     <input id="key-hyros" type="password" autocomplete="off" spellcheck="false" placeholder="Hyros API key">
+    <label for="key-ghl">GoHighLevel private integration token</label>
+    <input id="key-ghl" type="password" autocomplete="off" spellcheck="false" placeholder="pit-…">
     <div class="keyrow">
       <button class="btn-forget" id="key-forget" type="button">Forget these keys</button>
       <span class="spacer"></span>
@@ -1679,8 +1705,10 @@ td.name {{ min-width: 240px; }}
       <button class="btn btn-primary" id="key-save" type="button">Save and refresh</button>
     </div>
     <small>Meta: the same read-only system-user token with <code>ads_read</code> the build
-       uses. Hyros: Settings → API, scoped to the PBI account, since registrations come from
-       there. Clearing this browser's site data clears both.</small>
+       uses. Hyros: Settings → API, scoped to the PBI account; it ranks the creative.
+       GoHighLevel: the PBI location's read-only private integration token; without it the
+       headline registrations in today's box and this week keep their build-time values.
+       Clearing this browser's site data clears all three.</small>
   </div>
 </div>
 
@@ -1786,7 +1814,7 @@ async function checkForNewer() {{
       'late, so a published build can be a couple of hours old.<br><br>' +
       'This page ships with no credentials: the repository is public, so a key in the ' +
       'HTML would be a key on the open internet. For a pull that is never stale, press ' +
-      '<b>Turn on live data</b> and enter your own read-only Meta and Hyros keys. They ' +
+      '<b>Turn on live data</b> and enter your own read-only Meta, Hyros and GoHighLevel keys. They ' +
       'stay in this browser, on this device, and Refresh then calls both APIs directly ' +
       'and repaints the page in seconds.');
 }}
@@ -1823,13 +1851,14 @@ if (keyveil) {{
   document.getElementById('key-save').addEventListener('click', function () {{
     const m = document.getElementById('key-meta').value;
     const h = document.getElementById('key-hyros').value;
+    const g = document.getElementById('key-ghl').value;
     if (!m.trim() || !h.trim()) {{
       msg('Both keys are needed: registrations come from Hyros and spend comes from Meta, '
           + 'and a missing Hyros key would read as zero registrations rather than as an error.',
           true);
       return;
     }}
-    window.PBILive.saveKeys(m, h);
+    window.PBILive.saveKeys(m, h, g);
     const then = keyveil.__then;
     window.PBILive.closeKeyDialog();
     syncLiveBtn();

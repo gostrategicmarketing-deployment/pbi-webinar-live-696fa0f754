@@ -37,6 +37,8 @@
   var HYROS = 'https://api.hyros.com/v1/api/v1.0';
   var LS_META = 'pbi_meta_token';
   var LS_HYROS = 'pbi_hyros_key';
+  var LS_GHL = 'pbi_ghl_key';
+  var GHL = 'https://services.leadconnectorhq.com';
   var THIN_SPEND = CFG.thin_spend || 25;
   var THIN_CLICKS = CFG.thin_clicks || 20;
   var FEATURED = CFG.featured_n || 5;
@@ -47,7 +49,8 @@
   function creds() {
     return {
       meta: (localStorage.getItem(LS_META) || '').trim(),
-      hyros: (localStorage.getItem(LS_HYROS) || '').trim()
+      hyros: (localStorage.getItem(LS_HYROS) || '').trim(),
+      ghl: (localStorage.getItem(LS_GHL) || '').trim()
     };
   }
   function armed() { var c = creds(); return !!(c.meta && c.hyros); }
@@ -264,6 +267,62 @@
   /* --------------------------------------------------------- Meta reading */
 
   var ACT = 'act_' + String(CFG.account_id || '').replace(/^act_/, '');
+  /* ------------------------------------------------------------ GoHighLevel */
+
+  /**
+   * Every opt-in on the webinar funnel's forms over a date span, as {at, who}.
+   * Mirrors pull.py's ghl_submissions(): dates padded a day each way because GHL's
+   * startAt/endAt are whole dates, then cut on each submission's own timestamp. Only a
+   * timestamp and an opaque contact id are kept. A failed page throws: a GoHighLevel
+   * read that fails must never paint as zero registrations.
+   */
+  async function ghlSubs(sinceIso, untilIso) {
+    var out = [];
+    for (var form of (CFG.ghl_forms || [])) {
+      for (var page = 1; page < 200; page++) {
+        var url = GHL + '/forms/submissions?' + qs({
+          locationId: CFG.ghl_location, formId: form, startAt: sinceIso,
+          endAt: untilIso, limit: 100, page: page });
+        var d = null, lastErr = '';
+        for (var attempt = 0; attempt < 3 && !d; attempt++) {
+          try {
+            var r = await fetch(url, { cache: 'no-store', headers: {
+              Authorization: 'Bearer ' + creds().ghl, Version: '2021-07-28' } });
+            if (r.ok) d = await r.json();
+            else {
+              lastErr = 'HTTP ' + r.status;
+              if (r.status === 401 || r.status === 403) break;
+            }
+          } catch (e) { lastErr = e.message; }
+          if (!d) await sleep(1500 * (attempt + 1));
+        }
+        if (!d || !Array.isArray(d.submissions)) {
+          throw new Error('GoHighLevel read failed (' + lastErr + ')');
+        }
+        d.submissions.forEach(function (s) {
+          var ev = (s.others || {}).funneEventData || {};   // sic: GHL's spelling
+          if ((ev.funnel_id && ev.funnel_id !== CFG.ghl_funnel) || !s.createdAt) return;
+          out.push({ at: new Date(s.createdAt), who: s.contactId || s.id });
+        });
+        if (!(d.meta || {}).nextPage) break;
+      }
+    }
+    return out;
+  }
+
+  /** People who opted in within [opened, closed). */
+  function ghlCount(subs, opened, closed) {
+    var who = {};
+    subs.forEach(function (s) { if (s.at >= opened && s.at < closed) who[s.who] = 1; });
+    return Object.keys(who).length;
+  }
+
+  function regSub(ghl, form) {
+    return ghl === null || ghl === undefined
+      ? 'GoHighLevel could not be read, so no count is shown'
+      : num(ghl) + ' funnel opt-ins (GoHighLevel) + ' + num(form || 0) + ' Meta instant forms';
+  }
+
   function filterJSON() {
     return JSON.stringify([{ field: 'campaign.name', operator: 'CONTAIN', value: CFG.campaign_match }]);
   }
@@ -336,14 +395,14 @@
     var tz = CFG.account_tz;
     var rows = await graphAll('/' + ACT + '/insights', {
       level: 'account',
-      fields: 'spend,inline_link_clicks',
+      fields: 'spend,inline_link_clicks,actions',
       breakdowns: 'hourly_stats_aggregated_by_advertiser_time_zone',
       filtering: filterJSON(),
       time_range: JSON.stringify({ since: ymd(tz, opened), until: ymd(tz, closed) }),
       time_increment: 1,
       limit: 500
     });
-    var spend = 0, clicks = 0, hours = 0;
+    var spend = 0, clicks = 0, hours = 0, form = 0;
     rows.forEach(function (r) {
       var bucket = r.hourly_stats_aggregated_by_advertiser_time_zone || '';
       var hour = parseInt(bucket.slice(0, 2), 10);
@@ -354,9 +413,10 @@
         spend += fnum(r, 'spend');
         clicks += parseInt(fnum(r, 'inline_link_clicks'), 10);
         hours += 1;
+        form += regParts(r)[0];
       }
     });
-    return { spend: r2(spend), clicks: clicks, hours: hours };
+    return { spend: r2(spend), clicks: clicks, hours: hours, form: form };
   }
 
   async function creativeMap(adIds) {
@@ -475,7 +535,7 @@
     };
   }
 
-  async function weekCycle(campaignIds, opened, closed, now) {
+  async function weekCycle(campaignIds, opened, closed, now, subs) {
     var apiClose = closed > now ? now : closed;
     var m = await metaInstantRange(opened, apiClose);
     var dayIds = (await insights('campaign', ymd(CFG.account_tz, opened),
@@ -484,8 +544,13 @@
     var ids = dayIds.length ? dayIds : campaignIds;
     var hy = await hyrosRange(ids, isoOffset(CFG.week_tz, opened, true),
                               isoOffset(CFG.week_tz, apiClose, true));
-    var leads = hy ? hy.leads : 0;
+    var ghl = subs ? ghlCount(subs, opened, apiClose) : null;
+    var leads = ghl === null ? null : ghl + m.form;
     return {
+      ghl_optins: ghl,
+      meta_lead_form: m.form,
+      hyros_leads: hy ? hy.leads : null,
+      early_open: partsIn(CFG.week_tz, opened).H !== WEEK_HOUR,
       opened: opened, closed: closed, api_closed: apiClose,
       closing_now: closed > now,
       elapsed_hours: Math.floor((apiClose - opened) / 36e5),
@@ -496,28 +561,41 @@
       link_clicks: m.clicks,
       cost_per_link_click: m.clicks ? r2(m.spend / m.clicks) : null,
       leads: leads,
-      have: !!leads,
+      have: leads !== null,
       cost_per_lead: leads ? r2(m.spend / leads) : null,
-      conv_rate: m.clicks ? r2(leads / m.clicks * 100) : null
+      conv_rate: m.clicks && leads !== null ? r2(leads / m.clicks * 100) : null
     };
   }
 
-  /** The noon-Central Monday cycle currently open. */
+  /**
+   * When the cycle nominally opening at this Monday noon actually opened. pull.py's
+   * WEEK_EARLY_OPENS, carried in LIVE_CFG as ISO stamps with offsets.
+   */
+  function boundary(noon) {
+    var early = CFG.week_early_opens || {};
+    for (var k in early) {
+      if (new Date(k).getTime() === noon.getTime()) return new Date(early[k]);
+    }
+    return noon;
+  }
+
+  /** The noon-Central Monday cycle currently open, early openings applied. */
   function weekBounds(now) {
     var p = partsIn(CFG.week_tz, now);
     var dow = new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay();
     var backToMonday = (dow + 6) % 7;                 // Monday = 0
     var mon = addDays(p.y + '-' + pad(p.m) + '-' + pad(p.d), -backToMonday).split('-').map(Number);
-    var opened = zoned(CFG.week_tz, mon[0], mon[1], mon[2], WEEK_HOUR, 0);
-    // Before noon on a Monday the open cycle is still the earlier one. Re-anchor off the
-    // instant rather than off arithmetic on the date string, so a DST changeover inside
-    // the week cannot shift the boundary by an hour.
-    if (now < opened) {
-      var b = partsIn(CFG.week_tz, new Date(opened.getTime() - 7 * 864e5));
-      opened = zoned(CFG.week_tz, b.y, b.m, b.d, WEEK_HOUR, 0);
+    var noon = zoned(CFG.week_tz, mon[0], mon[1], mon[2], WEEK_HOUR, 0);
+    // Before a Monday's boundary the open cycle is still the earlier one. Re-anchor off
+    // the instant rather than off arithmetic on the date string, so a DST changeover
+    // inside the week cannot shift the boundary by an hour.
+    if (now < boundary(noon)) {
+      var b = partsIn(CFG.week_tz, new Date(noon.getTime() - 7 * 864e5));
+      noon = zoned(CFG.week_tz, b.y, b.m, b.d, WEEK_HOUR, 0);
     }
-    var cp = partsIn(CFG.week_tz, new Date(opened.getTime() + 7 * 864e5));
-    return { opened: opened, closed: zoned(CFG.week_tz, cp.y, cp.m, cp.d, WEEK_HOUR, 0) };
+    var cp = partsIn(CFG.week_tz, new Date(noon.getTime() + 7 * 864e5));
+    return { opened: boundary(noon),
+             closed: boundary(zoned(CFG.week_tz, cp.y, cp.m, cp.d, WEEK_HOUR, 0)) };
   }
 
   async function pullSnapshot(say) {
@@ -587,29 +665,42 @@
       .map(function (r) { return String(r.campaign_id); });
     if (!todayIds.length) todayIds = liveIds;
     var hyToday = await hyrosRange(todayIds, today, today);
+    var wb = weekBounds(now);
+
+    // The headline: GoHighLevel's funnel opt-ins plus Meta's instant forms. Read once,
+    // from the earlier of today's midnight and the week's opening, and sliced for both.
+    var subs = null;
+    var dayOpen = zoned(tz, +today.slice(0, 4), +today.slice(5, 7), +today.slice(8, 10), 0, 0);
+    if (creds().ghl) {
+      say('Reading funnel opt-ins from GoHighLevel');
+      var from = wb.opened < dayOpen ? wb.opened : dayOpen;
+      subs = await ghlSubs(addDays(ymd(tz, from), -1), addDays(today, 2));
+    }
     var tSpend = dayRow ? dayRow.spend : 0;
     var tClicks = dayRow ? dayRow.link_clicks : 0;
-    var tLeads = hyToday ? hyToday.leads : 0;
+    var tForm = dayRow ? dayRow.meta_lead_form : 0;
+    var tGhl = subs ? ghlCount(subs, dayOpen, new Date(dayOpen.getTime() + 864e5)) : null;
+    var tLeads = tGhl === null ? null : tGhl + tForm;
     var todayBox = {
       date: today,
       spend: tSpend,
       link_clicks: tClicks,
       cost_per_link_click: tClicks ? r2(tSpend / tClicks) : null,
       leads: tLeads,
+      ghl_optins: tGhl,
+      hyros_leads: hyToday ? hyToday.leads : null,
       cost_per_lead: tLeads ? r2(tSpend / tLeads) : null,
-      conv_rate: tClicks ? r2(tLeads / tClicks * 100) : null,
-      meta_lead_form: dayRow ? dayRow.meta_lead_form : 0,
+      conv_rate: tClicks && tLeads !== null ? r2(tLeads / tClicks * 100) : null,
+      meta_lead_form: tForm,
       meta_page_optin: dayRow ? dayRow.meta_page_optin : 0,
-      have: !!tLeads,          // a zero count reads as "—", exactly as in build.py
-      hyros_ok: !!hyToday      // whether Hyros answered at all, which greys the box
+      have: tLeads !== null
     };
 
     say('Reading the open week');
-    var wb = weekBounds(now);
-    var week = await weekCycle(liveIds, wb.opened, wb.closed, now);
+    var week = await weekCycle(liveIds, wb.opened, wb.closed, now, subs);
 
     return {
-      now: now, today: todayBox, week: week, windows: windows,
+      now: now, today: todayBox, week: week, windows: windows, ghl_ok: !!subs,
       live_count: live.length, matched: camps.length
     };
   }
@@ -645,26 +736,33 @@
   function paintTodayMeta(t) {
     var el = document.getElementById('today-meta');
     if (!el) return;
-    var f = t.meta_lead_form || 0, p = t.meta_page_optin || 0;
-    el.textContent = num(f + p) + ' (' + num(f) + ' on-Meta lead form, ' + num(p)
-      + ' opt-ins on the funnel page)';
+    el.textContent = 'Hyros counts ' + (t.hyros_leads === null ? '—' : num(t.hyros_leads))
+      + '; Meta’s pixel counts ' + num(t.meta_page_optin || 0) + ' funnel opt-ins.';
   }
 
+  function paintSub(box, b) {
+    var el = $('.thero-def', box);
+    if (el) el.textContent = regSub(b.ghl_optins, b.meta_lead_form);
+  }
+
+  // Without a GoHighLevel key the headline cannot be rebuilt, so today and the week
+  // keep their build-time values whole rather than mixing live spend with old counts.
   function paintToday(snap) {
     var box = $('#box-today');
-    if (!box) return;
+    if (!box || !snap.ghl_ok) return;
     paintBox(box, snap.today);
+    paintSub(box, snap.today);
     paintTodayMeta(snap.today);
     var flag = $('.today-flag', box);
     if (flag) flag.textContent = 'Today · ' + fmtDay(snap.today.date);
-    box.classList.toggle('today-stale', !snap.today.hyros_ok);
   }
 
   function paintWeek(snap) {
     var box = $('#box-week');
-    if (!box) return;
+    if (!box || !snap.ghl_ok) return;
     var w = snap.week;
     paintBox(box, w);
+    paintSub(box, w);
     var flag = $('.today-flag', box);
     if (flag) {
       flag.textContent = 'Weekly summary · ' + fmtDT(CFG.week_tz, w.opened)
@@ -676,11 +774,12 @@
         ? '<span class="tflag">Open</span> ' + w.elapsed_hours + ' of ' + w.total_hours
           + ' hours counted, through ' + fmtDT(CFG.week_tz, w.api_closed) + '. It closes at '
           + fmtDT(CFG.week_tz, w.closed) + ' and will keep climbing until then. Spend and link '
-          + 'clicks are sliced from Meta’s hourly figures so the noon boundary is exact; '
-          + 'registrations are Hyros.'
+          + 'clicks and instant forms are sliced from Meta’s hourly figures and GoHighLevel’s '
+          + 'opt-ins are cut on their own timestamps, so the boundary is exact on both sides.'
         : 'A complete cycle: ' + w.total_hours + ' hours, ' + fmtDT(CFG.week_tz, w.opened)
-          + ' to ' + fmtDT(CFG.week_tz, w.closed) + '. Spend and link clicks are sliced from '
-          + 'Meta’s hourly figures so the noon boundary is exact; registrations are Hyros.';
+          + ' to ' + fmtDT(CFG.week_tz, w.closed) + '. Spend, link clicks and instant forms '
+          + 'are sliced from Meta’s hourly figures and GoHighLevel’s opt-ins are cut on their '
+          + 'own timestamps, so the boundary is exact on both sides.';
     }
     box.classList.toggle('week-open', !!w.closing_now);
   }
@@ -979,6 +1078,8 @@
     var c = creds();
     $('#key-meta').value = c.meta;
     $('#key-hyros').value = c.hyros;
+    var g = $('#key-ghl');
+    if (g) g.value = c.ghl;
     veil.hidden = false;
     $('#key-meta').focus();
     veil.__then = onSaved || null;
@@ -1005,7 +1106,10 @@
       paint(snap);
       var secs = Math.round((Date.now() - started) / 1000);
       ui.msg('<b>Live</b> — pulled just now, in ' + secs + ' second'
-        + (secs === 1 ? '' : 's') + ', straight from Meta and Hyros, into this browser. '
+        + (secs === 1 ? '' : 's') + ', straight from Meta, Hyros'
+        + (snap.ghl_ok ? ' and GoHighLevel' : '') + ', into this browser. '
+        + (snap.ghl_ok ? '' : '<b>Today’s box and this week were not repainted</b>: their '
+          + 'registrations come from GoHighLevel and this browser holds no GoHighLevel key. ')
         + 'Two things below are still from the <b>' + esc(window.BUILD_STAMP || 'last')
         + '</b> build and say so rather than being repainted: <b>previous weeks</b>, which '
         + 'are closed cycles and do not move, and the <b>Method</b> notes, whose '
@@ -1041,13 +1145,16 @@
     pull: pullSnapshot,
     openKeyDialog: openKeyDialog,
     closeKeyDialog: closeKeyDialog,
-    saveKeys: function (meta, hyros) {
+    saveKeys: function (meta, hyros, ghl) {
       localStorage.setItem(LS_META, meta.trim());
       localStorage.setItem(LS_HYROS, hyros.trim());
+      if (ghl && ghl.trim()) localStorage.setItem(LS_GHL, ghl.trim());
+      else localStorage.removeItem(LS_GHL);
     },
     clearKeys: function () {
       localStorage.removeItem(LS_META);
       localStorage.removeItem(LS_HYROS);
+      localStorage.removeItem(LS_GHL);
     }
   };
 }());
