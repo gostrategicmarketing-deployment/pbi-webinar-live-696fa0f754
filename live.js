@@ -276,9 +276,9 @@
    * timestamp and an opaque contact id are kept. A failed page throws: a GoHighLevel
    * read that fails must never paint as zero registrations.
    */
-  async function ghlSubs(sinceIso, untilIso) {
+  async function ghlSubs(sinceIso, untilIso, forms, funnel) {
     var out = [];
-    for (var form of (CFG.ghl_forms || [])) {
+    for (var form of forms) {
       for (var page = 1; page < 200; page++) {
         var url = GHL + '/forms/submissions?' + qs({
           locationId: CFG.ghl_location, formId: form, startAt: sinceIso,
@@ -301,7 +301,7 @@
         }
         d.submissions.forEach(function (s) {
           var ev = (s.others || {}).funneEventData || {};   // sic: GHL's spelling
-          if ((ev.funnel_id && ev.funnel_id !== CFG.ghl_funnel) || !s.createdAt) return;
+          if ((funnel && ev.funnel_id && ev.funnel_id !== funnel) || !s.createdAt) return;
           out.push({ at: new Date(s.createdAt), who: s.contactId || s.id });
         });
         if (!(d.meta || {}).nextPage) break;
@@ -315,6 +315,27 @@
     var who = {};
     subs.forEach(function (s) { if (s.at >= opened && s.at < closed) who[s.who] = 1; });
     return Object.keys(who).length;
+  }
+
+  /** Mirrors pull.py's ghl_other_optins(): other-funnel people not on the Facebook funnel. */
+  function ghlOther(subs, others, opened, closed) {
+    if (!subs || !others) return null;
+    var seen = {}, who = {};
+    subs.forEach(function (s) { if (s.at >= opened && s.at < closed) seen[s.who] = 1; });
+    others.forEach(function (s) {
+      if (s.at >= opened && s.at < closed && !seen[s.who]) who[s.who] = 1;
+    });
+    return Object.keys(who).length;
+  }
+
+  /** Mirrors build.py's reg_all(). */
+  function regAll(leads, other) {
+    if (leads === null || leads === undefined) return '';
+    if (other === null || other === undefined) {
+      return 'The other webinar funnels could not be read from GoHighLevel';
+    }
+    return 'All webinar sign-ups in GoHighLevel: ' + num(leads + other) + ', incl. '
+      + num(other) + ' from the Organic Social, YouTube and Past Cohort funnels (not in the ad count)';
   }
 
   function regSub(ghl, form) {
@@ -535,7 +556,7 @@
     };
   }
 
-  async function weekCycle(campaignIds, opened, closed, now, subs) {
+  async function weekCycle(campaignIds, opened, closed, now, subs, others) {
     var apiClose = closed > now ? now : closed;
     var m = await metaInstantRange(opened, apiClose);
     var dayIds = (await insights('campaign', ymd(CFG.account_tz, opened),
@@ -548,6 +569,7 @@
     var leads = ghl === null ? null : ghl + m.form;
     return {
       ghl_optins: ghl,
+      ghl_other: ghlOther(subs, others, opened, apiClose),
       meta_lead_form: m.form,
       hyros_leads: hy ? hy.leads : null,
       early_open: partsIn(CFG.week_tz, opened).H !== WEEK_HOUR,
@@ -669,12 +691,19 @@
 
     // The headline: GoHighLevel's funnel opt-ins plus Meta's instant forms. Read once,
     // from the earlier of today's midnight and the week's opening, and sliced for both.
-    var subs = null;
+    var subs = null, others = null;
     var dayOpen = zoned(tz, +today.slice(0, 4), +today.slice(5, 7), +today.slice(8, 10), 0, 0);
     if (creds().ghl) {
       say('Reading funnel opt-ins from GoHighLevel');
       var from = wb.opened < dayOpen ? wb.opened : dayOpen;
-      subs = await ghlSubs(addDays(ymd(tz, from), -1), addDays(today, 2));
+      subs = await ghlSubs(addDays(ymd(tz, from), -1), addDays(today, 2),
+                           CFG.ghl_forms || [], CFG.ghl_funnel);
+      // The non-ad webinar funnels only feed a side line, so a failed read there blanks
+      // that line rather than aborting the refresh.
+      try {
+        others = await ghlSubs(addDays(ymd(tz, from), -1), addDays(today, 2),
+                               CFG.ghl_other_forms || [], null);
+      } catch (e) { others = null; }
     }
     var tSpend = dayRow ? dayRow.spend : 0;
     var tClicks = dayRow ? dayRow.link_clicks : 0;
@@ -688,6 +717,7 @@
       cost_per_link_click: tClicks ? r2(tSpend / tClicks) : null,
       leads: tLeads,
       ghl_optins: tGhl,
+      ghl_other: ghlOther(subs, others, dayOpen, new Date(dayOpen.getTime() + 864e5)),
       hyros_leads: hyToday ? hyToday.leads : null,
       cost_per_lead: tLeads ? r2(tSpend / tLeads) : null,
       conv_rate: tClicks && tLeads !== null ? r2(tLeads / tClicks * 100) : null,
@@ -697,7 +727,7 @@
     };
 
     say('Reading the open week');
-    var week = await weekCycle(liveIds, wb.opened, wb.closed, now, subs);
+    var week = await weekCycle(liveIds, wb.opened, wb.closed, now, subs, others);
 
     return {
       now: now, today: todayBox, week: week, windows: windows, ghl_ok: !!subs,
@@ -743,6 +773,8 @@
   function paintSub(box, b) {
     var el = $('.thero-def', box);
     if (el) el.textContent = regSub(b.ghl_optins, b.meta_lead_form);
+    var all = $('.thero-all', box);
+    if (all) all.textContent = regAll(b.leads, b.ghl_other);
   }
 
   // Without a GoHighLevel key the headline cannot be rebuilt, so today and the week
