@@ -410,7 +410,6 @@ def summary_box(flag, title, blurb, cells, note, extra_class="", box_id=""):
         <p class="thero-value">{hero[1]}</p>
         <p class="thero-label">{e(hero[0])}</p>
         <p class="thero-def">{e(hero[2])}</p>
-        <p class="thero-all">{e(hero[3] if len(hero) > 3 else "")}</p>
       </div>
       <div class="tgrid">{rest}</div>
     </div>
@@ -426,20 +425,8 @@ def reg_sub(ghl, form):
     return f"{n(ghl)} funnel opt-ins (GoHighLevel) + {n(form or 0)} Meta instant forms"
 
 
-def reg_all(leads, other):
-    """The separate all-sign-ups line (Phil, 2026-10-20): the headline plus the people who
-    came in through the non-ad webinar funnels. Never folded into the headline, so cost
-    per registration stays ad spend over ad registrations (live.js writes the same)."""
-    if leads is None:
-        return ""
-    if other is None:
-        return "The other webinar funnels could not be read from GoHighLevel"
-    return (f"All webinar sign-ups in GoHighLevel: {n(leads + other)}, incl. {n(other)} from "
-            "the Organic Social, YouTube and Past Cohort funnels (not in the ad count)")
-
-
 def blended_cells(leads, cost_per_lead, link_clicks, cost_per_click, spend, conv,
-                  spend_def, have, meta_form=None, meta_page=None, ghl=None, other=None):
+                  spend_def, have, meta_form=None, meta_page=None, ghl=None):
     """The six figures, in the order they are argued. Identical for every window.
 
     Since 2026-09-28 the headline is GoHighLevel's funnel opt-ins plus Meta's instant
@@ -448,7 +435,7 @@ def blended_cells(leads, cost_per_lead, link_clicks, cost_per_click, spend, conv
     """
     sub = reg_sub(ghl, meta_form)
     return [
-        ("Webinar registrations", n(leads) if have else "—", sub, reg_all(leads, other)),
+        ("Webinar registrations", n(leads) if have else "—", sub),
         ("Cost per registration", money(cost_per_lead) if cost_per_lead else "—", "Spend ÷ registrations"),
         ("Link clicks", n(link_clicks), "Outbound to the page"),
         ("Cost per link click", money(cost_per_click), "Spend ÷ link clicks"),
@@ -468,7 +455,7 @@ def today_html(t):
                           t["link_clicks"], t["cost_per_link_click"], t["spend"],
                           t.get("conv_rate"), "Amount spent today", have,
                           t.get("meta_lead_form", 0), t.get("meta_page_optin", 0),
-                          t.get("ghl_optins"), t.get("ghl_other"))
+                          t.get("ghl_optins"))
 
     mp, hy = t.get("meta_page_optin", 0), t.get("hyros_leads")
     note = ('Registrations are two halves added together, each counted where it lives: '
@@ -512,7 +499,7 @@ def week_html(w):
                           w.get("cost_per_link_click"), w["spend"], w.get("conv_rate"),
                           "Amount spent this week", have,
                           w.get("meta_lead_form"), w.get("meta_page_optin"),
-                          w.get("ghl_optins"), w.get("ghl_other"))
+                          w.get("ghl_optins"))
 
     if w.get("early_open"):
         blurb = (f'Registrations for the upcoming webinar. This cycle opened early, at '
@@ -562,8 +549,6 @@ def prev_weeks_html(weeks):
         <td class="name">{e(fmt_dt(w["opened"], w.get("tz_abbrev", "")))}
             <span class="prev-to">to {e(fmt_dt(w["closed"], w.get("tz_abbrev", "")))}</span></td>
         <td class="num strong">{"—" if w["leads"] is None else n(w["leads"])}</td>
-        <td class="num">{"—" if w["leads"] is None or w.get("ghl_other") is None
-                         else n(w["leads"] + w["ghl_other"])}</td>
         <td class="num">{money(w["cost_per_lead"])}</td>
         <td class="num">{n(w["link_clicks"])}</td>
         <td class="num">{money(w["cost_per_link_click"])}</td>
@@ -575,14 +560,12 @@ def prev_weeks_html(weeks):
     <h3>Previous weeks</h3>
     <p class="prev-sub">Each completed noon-Central Monday cycle, newest first, on the same
        five figures as the box above: registrations are GoHighLevel funnel opt-ins plus Meta
-       instant forms. All sign-ups adds the people who came in through the Organic Social,
-       YouTube and Past Cohort webinar funnels in GoHighLevel; it is not used for cost per
-       registration. A cycle cut short by an early start to the next one shows its real
+       instant forms. A cycle cut short by an early start to the next one shows its real
        closing time.</p>
     <div class="tablewrap">
       <table>
         <thead><tr>
-          <th class="l">Cycle</th><th>Registrations</th><th>All sign-ups</th><th>Cost / reg.</th>
+          <th class="l">Cycle</th><th>Registrations</th><th>Cost / reg.</th>
           <th>Link clicks</th><th>Cost / link click</th><th>Spent</th>
         </tr></thead>
         <tbody>{rows}</tbody>
@@ -840,7 +823,6 @@ def build(snap):
             "ghl_location": m.get("ghl_location"),
             "ghl_funnel": m.get("ghl_funnel"),
             "ghl_forms": m.get("ghl_forms", []),
-            "ghl_other_forms": m.get("ghl_other_forms", []),
             "week_early_opens": m.get("week_early_opens", {}),
         }, separators=(",", ":")),
         default=default,
@@ -1171,8 +1153,6 @@ body.is-live .band .live b::after {{
   text-transform: uppercase; color: #fff; line-height: 1.4;
 }}
 .thero-def {{ margin: 6px 0 0; font-size: 12px; color: rgba(255,255,255,.66); }}
-.thero-all {{ margin: 4px 0 0; font-size: 12px; color: rgba(255,255,255,.66); }}
-.thero-all:empty {{ display: none; }}
 
 /* auto-fit rather than a fixed five: the five cells sit in one row when there is room
    and reflow evenly when there is not, instead of leaving a hole in a 3+2 split. */

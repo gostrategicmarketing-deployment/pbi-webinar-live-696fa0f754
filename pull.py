@@ -122,16 +122,6 @@ GHL_WEBINAR_FORMS = {
     "BU61M3IbD1mFFFw2HXe8": "Weekly Webinar [Facebook] Control",
     "jkt0KlO7oBUI0ZaGyozu": "Weekly Webinar [Facebook] Variant",
 }
-# The other webinar funnels: same webinar, non-ad traffic (Phil, 2026-10-20). Shown as a
-# separate "all sign-ups in GoHighLevel" line under each headline, never folded into it,
-# so cost per registration stays ad spend over ad registrations. Each form lives on its
-# own funnel, so these are not filtered by funnel id. A new webinar funnel = add its form.
-GHL_OTHER_WEBINAR_FORMS = {
-    "S7GjIi1lyp5bJ4jZyHjr": "Weekly Webinar [Organic Social] Control",
-    "8EIgNqfaoryJT8crOWwz": "Weekly Webinar [Past Cohort] Control",
-    "A03IZ8zn6wWHdVvG1zUv": "Weekly Webinar [Past Cohort] Variant",
-    "gahY0HsjxQcFRFpZXuhf": "Weekly Webinar [Youtube] Variant",
-}
 REG_SOURCE = "GHL funnel opt-ins + Meta instant-form leads"
 
 # Hourly runs would otherwise fill data/ with 24 files a day. Two days of history is
@@ -542,11 +532,11 @@ def ghl_key():
     return key
 
 
-_GHL_SUBS = {}       # per form set: [] read and empty; False read failed; absent not read yet
+_GHL_SUBS = None     # [] read and empty; False read failed; None not read yet
 
 
-def ghl_submissions(forms=GHL_WEBINAR_FORMS, funnel=GHL_WEBINAR_FUNNEL):
-    """Every opt-in on these forms since launch, as [(instant, person)], read once.
+def ghl_submissions():
+    """Every opt-in on the webinar funnel since launch, as [(instant, person)], read once.
 
     None when there is no key or any page fails: half a count is worse than none, and a
     failed read must never print as zero registrations. Only the timestamp and an opaque
@@ -555,18 +545,18 @@ def ghl_submissions(forms=GHL_WEBINAR_FORMS, funnel=GHL_WEBINAR_FUNNEL):
     `startAt`/`endAt` are whole dates on GHL's side, so the range is padded a day each way
     and every window is cut on the submission's own UTC timestamp instead.
     """
-    cache = tuple(forms)
-    if cache in _GHL_SUBS:
-        return _GHL_SUBS[cache] if _GHL_SUBS[cache] is not False else None
+    global _GHL_SUBS
+    if _GHL_SUBS is not None:
+        return _GHL_SUBS if _GHL_SUBS is not False else None
     key = ghl_key()
     if not key:
         print("  ghl: no key (GHL_API_KEY or the PBI key file); headline registrations unavailable")
-        _GHL_SUBS[cache] = False
+        _GHL_SUBS = False
         return None
     since = (date.fromisoformat(WINDOW_START) - timedelta(days=1)).isoformat()
     until = (datetime.now(ACCOUNT_TZ).date() + timedelta(days=2)).isoformat()
     out = []
-    for form in forms:
+    for form in GHL_WEBINAR_FORMS:
         page = 1
         while True:
             url = f"{GHL_API}/forms/submissions?" + urllib.parse.urlencode({
@@ -584,19 +574,19 @@ def ghl_submissions(forms=GHL_WEBINAR_FORMS, funnel=GHL_WEBINAR_FUNNEL):
             if not d or not isinstance(d.get("submissions"), list):
                 print(f"  ghl: read failed (form {form}, page {page}, HTTP {code.strip()}); "
                       "headline registrations unavailable")
-                _GHL_SUBS[cache] = False
+                _GHL_SUBS = False
                 return None
             for sub in d["submissions"]:
                 ev = (sub.get("others") or {}).get("funneEventData") or {}  # sic: GHL's spelling
-                if (funnel and ev.get("funnel_id") not in (None, funnel)) or not sub.get("createdAt"):
+                if ev.get("funnel_id") not in (None, GHL_WEBINAR_FUNNEL) or not sub.get("createdAt"):
                     continue
                 at = datetime.fromisoformat(sub["createdAt"].replace("Z", "+00:00"))
                 out.append((at, sub.get("contactId") or sub.get("id")))
             if not (d.get("meta") or {}).get("nextPage"):
                 break
             page += 1
-    print(f"  ghl: {len(out)} submissions on {len(forms)} webinar form(s) since {WINDOW_START}")
-    _GHL_SUBS[cache] = out
+    print(f"  ghl: {len(out)} webinar-funnel submissions since {WINDOW_START}")
+    _GHL_SUBS = out
     return out
 
 
@@ -606,16 +596,6 @@ def ghl_optins(opened, closed):
     if subs is None:
         return None
     return len({who for at, who in subs if opened <= at < closed})
-
-
-def ghl_other_optins(opened, closed):
-    """People on the other (non-ad) webinar funnels in [opened, closed) who did not also
-    opt in on the Facebook funnel in that window, or None if either read failed."""
-    fb, other = ghl_submissions(), ghl_submissions(GHL_OTHER_WEBINAR_FORMS, None)
-    if fb is None or other is None:
-        return None
-    seen = {who for at, who in fb if opened <= at < closed}
-    return len({who for at, who in other if opened <= at < closed} - seen)
 
 
 def creatives(ad_ids):
@@ -926,10 +906,8 @@ def week_cycle(opened, closed, now, label):
     # instants. A GHL read that failed leaves `leads` as None, never 0.
     ghl = ghl_optins(opened, api_close)
     leads = ghl + form if ghl is not None else None
-    other = ghl_other_optins(opened, api_close)
 
     return {
-        "ghl_other": other,
         "meta_lead_form": form,
         "meta_page_optin": page,
         "ghl_optins": ghl,
@@ -1060,10 +1038,8 @@ def main():
     day_open = datetime.combine(today, time(0), ACCOUNT_TZ)
     ghl = ghl_optins(day_open, day_open + timedelta(days=1))
     leads = ghl + form if ghl is not None else None
-    other = ghl_other_optins(day_open, day_open + timedelta(days=1))
     print(f"  today: {leads} registrations = {ghl} GHL funnel opt-ins + {form} instant forms "
-          f"(+{other} other webinar funnels; hyros {hy_leads}, meta pixel {page}), "
-          f"${spend:,.2f}, {clicks} link clicks")
+          f"(hyros {hy_leads}, meta pixel {page}), ${spend:,.2f}, {clicks} link clicks")
     todays = {
         "date": today_iso,
         "spend": spend,
@@ -1071,7 +1047,6 @@ def main():
         "cost_per_link_click": round(spend / clicks, 2) if clicks else None,
         "leads": leads,
         "ghl_optins": ghl,
-        "ghl_other": other,
         "hyros_leads": hy_leads,
         "meta_lead_form": form,
         "meta_page_optin": page,
@@ -1117,7 +1092,6 @@ def main():
             "ghl_location": GHL_LOCATION,
             "ghl_funnel": GHL_WEBINAR_FUNNEL,
             "ghl_forms": list(GHL_WEBINAR_FORMS),
-            "ghl_other_forms": list(GHL_OTHER_WEBINAR_FORMS),
             "week_early_opens": {k.isoformat(timespec="minutes"): v.isoformat(timespec="minutes")
                                  for k, v in WEEK_EARLY_OPENS.items()},
             "headline_source": REG_SOURCE,
