@@ -41,19 +41,6 @@ screen: 2026-08-20 reads 56 here against 57 there.
 If Erin adds a new form to that funnel step, add its id to `GHL_WEBINAR_FORMS` in
 `pull.py`; `live.js` takes the list from `LIVE_CFG`.
 
-### All webinar sign-ups line (2026-10-20)
-
-The same webinar also takes sign-ups through funnels the ads never point at: Organic
-Social, Past Cohort and YouTube (`GHL_OTHER_WEBINAR_FORMS` in `pull.py`). Phil chose to
-show them **as a separate line under each headline and an "All sign-ups" column in
-Previous weeks, never in the headline**, so cost per registration stays ad spend over ad
-registrations. The count is people on those forms in the window who did not also opt in
-on the Facebook funnel. Checked against GHL directly on 2026-10-20: the Facebook funnel and
-instant forms matched the headline exactly (week of 10-12: 73 + 66 = 139), and the other
-funnels added 13 that week (10-05: 25, 09-28: 8). A new webinar funnel means adding its
-form id there; `live.js` reads the list from `LIVE_CFG`, and a failed read of these forms
-blanks only that line.
-
 **Hyros still ranks the creative** (Best images/videos, By campaign, Every ad, Day by day)
 because it credits registrations per ad and reconciles at ad level. Its totals will not
 equal the headline, and the Method notes say so. Hyros and Meta's pixel opt-ins appear
