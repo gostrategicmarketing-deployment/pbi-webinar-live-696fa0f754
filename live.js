@@ -371,21 +371,33 @@
   }
 
   async function metaDaily(since, until) {
+    // Day-level rows return spend "0" (2026-10-21); sum the hourly buckets instead.
     var rows = await graphAll('/' + ACT + '/insights', {
       level: 'account',
       fields: 'spend,inline_link_clicks,actions',
+      breakdowns: 'hourly_stats_aggregated_by_advertiser_time_zone',
       filtering: filterJSON(),
       time_range: JSON.stringify({ since: since, until: until }),
       time_increment: 1,
       limit: 500
     });
-    return rows.map(function (r) {
+    var days = {};
+    rows.forEach(function (r) {
+      var d = days[r.date_start] = days[r.date_start] ||
+        { spend: 0, clicks: 0, form: 0, page: 0 };
+      var parts = regParts(r);
+      d.spend += fnum(r, 'spend');
+      d.clicks += parseInt(fnum(r, 'inline_link_clicks'), 10);
+      d.form += parts[0];
+      d.page += parts[1];
+    });
+    return Object.keys(days).sort().map(function (k) {
       return {
-        date: r.date_start,
-        spend: r2(fnum(r, 'spend')),
-        link_clicks: parseInt(fnum(r, 'inline_link_clicks'), 10),
-        meta_lead_form: regParts(r)[0],
-        meta_page_optin: regParts(r)[1]
+        date: k,
+        spend: r2(days[k].spend),
+        link_clicks: days[k].clicks,
+        meta_lead_form: days[k].form,
+        meta_page_optin: days[k].page
       };
     });
   }

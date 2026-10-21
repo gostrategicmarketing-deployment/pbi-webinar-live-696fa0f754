@@ -327,9 +327,13 @@ def insights(level, since, until, extra_fields=""):
 
 
 def daily(since, until):
+    # Meta's day-level rows (time_increment=1, account or campaign level) started
+    # returning spend "0" on 2026-10-21 while link clicks stayed right. Hourly buckets
+    # still carry the real spend, so the day is the sum of its hours.
     rows = get_all(f"{ACCOUNT}/insights", {
         "level": "account",
         "fields": "spend,inline_link_clicks,actions",
+        "breakdowns": "hourly_stats_aggregated_by_advertiser_time_zone",
         "filtering": json.dumps(
             [{"field": "campaign.name", "operator": "CONTAIN", "value": CAMPAIGN_MATCH}]
         ),
@@ -337,15 +341,23 @@ def daily(since, until):
         "time_increment": 1,
         "limit": 500,
     })
-    out = []
+    days = {}
     for r in rows:
+        d = days.setdefault(r["date_start"], {"spend": 0.0, "clicks": 0, "form": 0, "page": 0})
         form, page = reg_parts(r)
+        d["spend"] += num(r, "spend")
+        d["clicks"] += int(num(r, "inline_link_clicks"))
+        d["form"] += form
+        d["page"] += page
+    out = []
+    for day in sorted(days):
+        d = days[day]
         out.append({
-            "date": r["date_start"],
-            "spend": round(num(r, "spend"), 2),
-            "link_clicks": int(num(r, "inline_link_clicks")),
-            "meta_lead_form": form,
-            "meta_page_optin": page,
+            "date": day,
+            "spend": round(d["spend"], 2),
+            "link_clicks": d["clicks"],
+            "meta_lead_form": d["form"],
+            "meta_page_optin": d["page"],
             "leads": 0,
         })
     hy = hyros_daily(since, until)
