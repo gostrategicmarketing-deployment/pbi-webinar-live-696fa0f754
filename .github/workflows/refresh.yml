@@ -95,7 +95,9 @@ jobs:
           FB_TOKEN: ${{ secrets.FB_TOKEN }}
           HYROS_API_KEY: ${{ secrets.HYROS_API_KEY }}
           GHL_API_KEY: ${{ secrets.GHL_API_KEY }}
-        run: python pull.py
+        # One whole-pull retry on top of the per-call retries inside pull.py: a bad
+        # minute on Meta or the runner network should cost two minutes, not a failed run.
+        run: python pull.py || { echo "::warning::pull failed once; retrying in 60s"; sleep 60; python pull.py; }
 
       - name: Build the page
         run: python build.py

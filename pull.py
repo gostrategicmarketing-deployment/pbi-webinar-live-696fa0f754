@@ -155,8 +155,10 @@ def redact(text):
     return text.replace(TOKEN, "***") if TOKEN else text
 
 
-# curl exits: partial transfer, timeout, empty reply, send failure, receive failure.
-TRANSIENT_TRANSPORT = (18, 28, 52, 55, 56)
+# curl exits: couldn't resolve/connect, HTTP/2 framing error, partial transfer, timeout,
+# TLS connect error, empty reply, send failure, receive failure, HTTP/2 stream not closed
+# cleanly (92: killed the 2026-10-22 18:09Z run on its first attempt, never retried).
+TRANSIENT_TRANSPORT = (6, 7, 16, 18, 28, 35, 52, 55, 56, 92)
 
 # Graph answers a request that is fine an hour later with one of these often enough to
 # break about one hourly run in twenty. 500/502/503/504 are Meta's own bad minute; 429
